@@ -58,5 +58,17 @@ class QdrantManager:
                             "sparse": models.SparseVectorParams()
                         }
                     )
+                else:
+                    # Check if the existing collection needs upgrading for Hybrid Search (Sparse Vectors)
+                    col_info = self.client.get_collection(collection_name)
+                    config = col_info.config.params
+                    if getattr(config, "sparse_vectors_config", None) is None or "sparse" not in getattr(config, "sparse_vectors_config", {}):
+                        logger.info(f"Upgrading existing Qdrant collection '{collection_name}' to support Hybrid Search...")
+                        self.client.update_collection(
+                            collection_name=collection_name,
+                            sparse_vectors_config={
+                                "sparse": models.SparseVectorParams()
+                            }
+                        )
             except Exception as e:
                 logger.error(f"Failed to ensure collection '{collection_name}': {e}")

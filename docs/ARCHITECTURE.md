@@ -138,7 +138,7 @@ The `Llama.cpp` server processes the prompt and streams the output directly to t
 
 Because ENML relies on multiple localized AI models, it utilizes a Dynamic VRAM reservation system.
 
-1. **Automation Reserve:** `run_server.sh` keeps 2048 MB of VRAM untouched for background automation tools.
-2. **Breathing Room:** 500 MB is kept entirely free to prevent OS UI freezing.
-3. **Model Budget:** The remaining VRAM is calculated dynamically to determine the `FINAL_NGL` (Number of GPU Layers) offloaded to the main `llama-server`.
-4. **CPU Models:** The Embedding (`bge-base-en`) and Reranker models are executed entirely on the CPU via `sentence-transformers` to maximize generation speed for the heavy LLM.
+1. **Strict Buffer:** A rigid 300 MB margin is enforced using `llama-server`'s native `--fit-target` argument to guarantee OS UI stability, rather than relying on bash arithmetic.
+2. **Native Layer Optimization:** Because the buffer is native, the `FINAL_NGL` (GPU Layers) integer is defaulted to a massive threshold (999). This forces the C++ engine to automatically optimize exactly how many layers it can safely cram into whatever your *current* Free VRAM is.
+3. **Offline/Online Adaptation:** By using native fitting on launch, the server seamlessly adapts to whether your other heavy systems (like Background Automation) are currently online or offline, without hardcoded static reservations.
+4. **CPU Models:** The Embedding (`bge-base-en`) and Reranker models are executed entirely on the CPU via `sentence-transformers` to maximize open VRAM availability for the heavy conversational LLM.

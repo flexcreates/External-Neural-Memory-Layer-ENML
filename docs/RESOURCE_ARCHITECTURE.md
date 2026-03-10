@@ -4,22 +4,20 @@
 
 ## VRAM Strategy: Dynamic GPU-Process-Aware
 
-The LLM server **dynamically calculates** GPU layer offloading at startup:
+The LLM server **dynamically delegates** GPU layer offloading directly to `llama.cpp` using the native `--fit` flag:
 
-1. Reads **total** and **free** VRAM via `nvidia-smi`
-2. Detects **all active GPU processes** (Whisper, compositor, etc.)
-3. Subtracts **500MB breathing room** from free VRAM
-4. Calculates optimal layers: `(free - 500) / 140MB per layer`
-5. Caps at **22 layers** maximum (safety ceiling)
+1. Evaluates **total** and **free** VRAM in real-time.
+2. Senses **all active GPU processes** directly via free VRAM availability.
+3. Sets a rigid **300MB strict buffer** (`--fit-target 300`) that must never be touched.
+4. Auto-calculates safe layer capacity: Attempts to load maximum layers (`-ngl 999`), forcing the C++ engine to optimize and fit as many layers as possible into the remaining memory budget without exceeding the buffer.
 
 ### Example Scenarios
 
-| GPU State | Free VRAM | Budget | Layers | Notes |
-|---|---|---|---|---|
-| Nothing running | ~5800MB | ~5300MB | 22 (capped) | Full power |
-| Whisper (~2000MB) | ~3800MB | ~3300MB | 22 (capped) | Typical co-existence |
-| Whisper (~3000MB) | ~2800MB | ~2300MB | 16 | Auto-reduced |
-| Heavy load | ~1200MB | ~700MB | 5 | Graceful fallback |
+| GPU State | Free VRAM | Dedicated to LLM | Notes |
+|---|---|---|---|
+| Nothing running | ~5800MB | ~5500MB | Max layers offloaded; peak performance |
+| Background Apps (~2000MB) | ~3800MB | ~3500MB | Auto-scales layers down softly |
+| Heavy load (~4600MB) | ~1200MB | ~900MB | Critical fallback to CPU computation |
 
 ## RAM Allocation
 
@@ -37,7 +35,7 @@ The LLM server **dynamically calculates** GPU layer offloading at startup:
 | Context size | 4096 tokens | Saves ~500MB KV cache vs 8192; sufficient for memory injection |
 | Batch size | 512 | Reduces peak VRAM spikes |
 | Prompt Cache | 2048 MB | Reduces RAM pressure from historical state retention |
-| GPU layers | Dynamic (max 22) | Adapts to available VRAM |
+| GPU layers | Auto (Target 999) | Adapts to available VRAM natively via `--fit` |
 | Parallel slots | 1 | Single inference stream |
 | Flash attention | On | Reduces KV cache memory |
 | Memory lock | On | Prevents OS swapping model weights |
@@ -45,7 +43,7 @@ The LLM server **dynamically calculates** GPU layer offloading at startup:
 ## Performance Philosophy
 
 1. **Stability** — Never exceed safe VRAM bounds
-2. **VRAM safety margin** — Always keep 500MB free
+2. **VRAM safety margin** — Always keep definitively 300MB free using `--fit-target`
 3. **Sustained operation** — Designed for continuous uptime
 4. **Then speed** — Token/s is a secondary concern
 

@@ -283,7 +283,7 @@ for res in results:
 
 ### Out of memory / slow responses
 **Causes:**
-- VRAM exhausted — ENML automatically reserves 500MB as a hard buffer and 2GB for future automation systems. If you still run OOM, ensure no other background applications are dominating the GPU.
+- VRAM exhausted — ENML completely delegates VRAM calculation to the native `llama.cpp` engine. It dynamically uses all available Free VRAM minus a strict 300MB buffer for system stability (`--fit-target 300`). If you still run OOM, ensure no other heavy applications were launched *after* `run_server.sh` booted up.
 - Context too large — the system auto-trims and uses Context Distillation to shrink memories, but very long copy-pasted blocks can be heavy.
 - Embedding module loading — The first run downloads the `bge-base-en` and reranker models (~350MB). They run purely on CPU to save VRAM for the main LLM.
 

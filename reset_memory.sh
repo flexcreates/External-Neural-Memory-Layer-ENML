@@ -87,7 +87,7 @@ PROFILE_FILE="${AUTHORITY_DIR}/profile.json"
 mkdir -p "$AUTHORITY_DIR"
 cat > "$PROFILE_FILE" << EOJSON
 {
-  "identity": {},
+  "user": {},
   "assistant": {
     "name": "${AI_NAME}"
   },
