@@ -74,7 +74,7 @@ if command -v nvidia-smi &>/dev/null; then
     FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1)
     USED_VRAM=$((TOTAL_VRAM - FREE_VRAM))
     
-    FINAL_NGL=999 # Max theoretical layers; llama.cpp will scale it down automatically
+    # Max theoretical layers are implicitly handled by --fit on
     
     # Detect GPU processes for the startup report
     GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null || echo "")
@@ -84,7 +84,6 @@ else
     USED_VRAM="N/A"
     AVAILABLE="N/A"
     GPU_PROCS=""
-    FINAL_NGL=0
 fi
 
 # ── Startup Banner ───────────────────────────────────────────────────
@@ -103,7 +102,7 @@ if [ "$TOTAL_VRAM" != "N/A" ]; then
     echo "  Free:      ${FREE_VRAM}MB"
     echo "  Reserved:  ${BREATHING_ROOM}MB (strict buffer via llama.cpp)"
     echo "  Budget:    Dynamic (managed precisely by llama.cpp)"
-    echo "  Layers:    Max threshold with auto-fallback (-ngl 999)"
+    echo "  Layers:    Auto-managed by llama.cpp (--fit on)"
     echo ""
     if [ -n "$GPU_PROCS" ]; then
         echo "  ── Active GPU Processes ──"
@@ -136,7 +135,6 @@ fi
 "$LLAMA_SERVER" \
     -m "$MODEL_PATH" \
     -c "$CONTEXT_SIZE" \
-    -ngl "$FINAL_NGL" \
     --fit on \
     --fit-target "$BREATHING_ROOM" \
     -b "$BATCH_SIZE" \
