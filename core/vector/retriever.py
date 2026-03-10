@@ -27,6 +27,7 @@ class Retriever:
     def __init__(self):
         self.qdrant_manager = QdrantManager()
         self.embedding_service = EmbeddingService()
+        self.sparse_embedding_service = SparseEmbeddingService()
         self.reranker = get_reranker()
 
     def add_memory(self, collection: str, text: str, payload: Dict[str, Any], memory_id: Optional[str] = None):
