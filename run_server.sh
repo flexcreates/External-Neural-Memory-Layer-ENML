@@ -130,6 +130,14 @@ echo ""
 LLAMA_DIR="$(dirname "$LLAMA_SERVER")"
 export LD_LIBRARY_PATH="$LLAMA_DIR:$LD_LIBRARY_PATH"
 
+# Auto-detect local Python venv CUDA libs if present to support user-compiled llama.cpp
+NVIDIA_VENV_DIR=$(find "$(pwd)/.venv" -type d -name "nvidia" -path "*/site-packages/nvidia" -print -quit 2>/dev/null)
+if [ -n "$NVIDIA_VENV_DIR" ]; then
+    for dir in "$NVIDIA_VENV_DIR"/*/lib; do
+        export LD_LIBRARY_PATH="$dir:$LD_LIBRARY_PATH"
+    done
+fi
+
 "$LLAMA_SERVER" \
     -m "$MODEL_PATH" \
     -c "$CONTEXT_SIZE" \
