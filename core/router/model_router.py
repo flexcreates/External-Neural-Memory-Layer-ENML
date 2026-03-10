@@ -5,7 +5,12 @@ from core.router.model_profiles import MEDIUM_MODEL_PROFILE, SMALL_MODEL_PROFILE
 class ModelRouter:
     """Small heuristic router for chat model selection."""
 
+    def __init__(self, fixed_model: str | None = None):
+        self.fixed_model = fixed_model
+
     def route(self, user_input: str) -> str:
+        if self.fixed_model:
+            return self.fixed_model
         text = user_input.lower()
         if any(token in text for token in ["code", "python", "bug", "stack trace", "refactor", "function", "class"]):
             return CODING_CHAT_MODEL

@@ -6,6 +6,8 @@ from core.config import (
     QDRANT_RESEARCH_COLLECTION,
 )
 from core.logger import get_logger
+from core.llm_runtime import detect_server_model
+from core.prompt_templates import build_chat_prompt_from_messages
 from openai import OpenAI
 
 logger = get_logger(__name__)
@@ -16,6 +18,7 @@ class QueryRouter:
 
     def __init__(self):
         self.client = OpenAI(base_url=f"{LLAMA_SERVER_URL}/v1", api_key="sk-proj-no-key")
+        self.model_name = detect_server_model(self.client)
 
     def route(self, query: str) -> str:
         heuristic = self._heuristic_route(query)
@@ -24,9 +27,9 @@ class QueryRouter:
             return heuristic
 
         try:
-            response = self.client.chat.completions.create(
-                model="Meta-Llama-3-8B-Instruct",
-                messages=[
+            prompt = build_chat_prompt_from_messages(
+                self.model_name,
+                [
                     {
                         "role": "system",
                         "content": (
@@ -38,10 +41,14 @@ class QueryRouter:
                     },
                     {"role": "user", "content": query},
                 ],
+            )
+            response = self.client.completions.create(
+                model=self.model_name,
+                prompt=prompt,
                 temperature=0.0,
                 max_tokens=10,
             )
-            intent = response.choices[0].message.content.strip().lower()
+            intent = response.choices[0].text.strip().lower()
             mapped = {
                 "personal_query": QDRANT_KNOWLEDGE_COLLECTION,
                 "project_query": QDRANT_PROJECT_COLLECTION,

@@ -6,7 +6,7 @@ from .logger import get_logger
 from .context.distiller import ContextDistiller
 from .context.prompt_budget_manager import PromptBudgetManager
 from .memory.types import EvidencePacket, MemoryType
-from .prompt_templates import build_chat_prompt
+from .prompt_templates import build_chat_prompt, get_model_template_info
 
 logger = get_logger(__name__)
 
@@ -29,6 +29,9 @@ class ContextBuilder:
         """
         logger.info(f"[INJECT] Building context for: '{user_input[:60]}'")
         budget_manager = PromptBudgetManager(max_context_tokens)
+        template_info = get_model_template_info(model_name)
+        is_small_model = template_info.size_b is not None and template_info.size_b <= 3.5
+        is_personal_query = self._is_personal_query(user_input)
         
         retrieval_data = self.memory_manager.retrieve_context(user_input, n_results=5, model_profile=model_profile)
         mode = retrieval_data["type"]
@@ -64,6 +67,30 @@ class ContextBuilder:
             else:
                 docs = []
         docs = budget_manager.trim_items(docs, self.estimate_tokens)
+        if is_small_model and len(docs) > 2:
+            docs = docs[:2]
+            logger.info("[PROMPT] Small-model compact mode: limiting evidence injection to 2 items")
+
+        preference_intent = self._detect_preference_intent(user_input)
+        preference_evidence_hint = ""
+        if preference_intent and docs:
+            evidence_text = "\n".join(docs).lower()
+            has_likes = " likes " in evidence_text
+            has_loves = " loves " in evidence_text
+            if preference_intent == "love" and not has_loves and has_likes:
+                preference_evidence_hint = (
+                    "\n\n<preference_resolution>\n"
+                    "The user asked about things they love, but memory evidence only states things they like. "
+                    "Answer with 'like' and clarify that no 'love' memory was found.\n"
+                    "</preference_resolution>\n"
+                )
+            elif preference_intent == "like" and not has_likes and has_loves:
+                preference_evidence_hint = (
+                    "\n\n<preference_resolution>\n"
+                    "The user asked about things they like, but memory evidence only states things they love. "
+                    "Answer with 'love' and clarify that no 'like' memory was found.\n"
+                    "</preference_resolution>\n"
+                )
         
         temperature = 0.6
         effective_system_prompt = system_prompt
@@ -116,12 +143,16 @@ class ContextBuilder:
                 f"If this is a memory recall reply, keep it compact and factual. "
                 f"{factual_recall_rule}"
             )
+            if preference_evidence_hint:
+                effective_system_prompt += preference_evidence_hint
             logger.info(f"[INJECT] ✅ Injected {len(docs)} confidence-scored items into system prompt")
             # Log individual scores from scored_items if available
             scored_items = retrieval_data.get("scored_items", [])
             for i, item in enumerate(scored_items[:5]):
                 logger.debug(f"[INJECT]   [{i}] score={item.get('score', '?')} type={item.get('type', '?')} → {item.get('text', '')[:80]}")
         else:
+            if is_personal_query:
+                temperature = min(temperature, 0.2)
             effective_system_prompt += (
                 "\n\n<knowledge>\nNo relevant memories found.\n</knowledge>\n"
                 "\n<answer_policy>\n- No relevant memories were retrieved.\n- Do not fabricate personal facts.\n- If the answer depends on memory, say you do not know.\n</answer_policy>\n"
@@ -130,6 +161,13 @@ class ContextBuilder:
                 f"{sufficiency_feedback}\n\n"
                 f"No specific Graph memories located. Answer using standard knowledge. Avoid repetitive filler closers."
             )
+            if is_personal_query:
+                effective_system_prompt += (
+                    "\n\n<personal_memory_guard>\n"
+                    "The user asked about personal facts. Since no memory evidence was retrieved, "
+                    "do not guess or infer. Say you do not know and ask a brief clarification if needed.\n"
+                    "</personal_memory_guard>\n"
+                )
             logger.warning(f"[INJECT] ⚠ No memories above confidence threshold (mode='{mode}')")
             
         # 4. Authority Identity Module Injection (Absolute Highest Priority)
@@ -137,7 +175,7 @@ class ContextBuilder:
         effective_system_prompt = self.memory_manager.authority_memory.get_injected_prompt(effective_system_prompt)
         logger.debug(f"[INJECT] Authority memory injected into prompt")
         # 5. Append Conversation History (with token budget enforcement)
-        SLIDING_WINDOW_COUNT = 12
+        SLIDING_WINDOW_COUNT = 6 if is_small_model else 12
         recent_history = history[-SLIDING_WINDOW_COUNT:] if len(history) > SLIDING_WINDOW_COUNT else history
         
         # Calculate remaining token budget after system prompt
@@ -188,6 +226,22 @@ class ContextBuilder:
         if no_questions:
             lines.append(f"- {no_questions}")
         return "\n".join(lines) if lines else "- Keep responses concise and natural."
+
+    def _is_personal_query(self, text: str) -> bool:
+        lowered = (text or "").lower()
+        if "my " in lowered or "mine" in lowered or "myself" in lowered:
+            return True
+        if lowered.startswith(("what is my", "what's my", "who am i", "do i", "am i", "is my")):
+            return True
+        return False
+
+    def _detect_preference_intent(self, text: str) -> str:
+        lowered = (text or "").lower()
+        if "love" in lowered:
+            return "love"
+        if "like" in lowered:
+            return "like"
+        return ""
 
     def _render_evidence(self, evidence_packet: EvidencePacket) -> List[str]:
         sections: List[str] = []

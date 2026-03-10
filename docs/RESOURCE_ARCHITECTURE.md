@@ -1,51 +1,56 @@
-# ENML — System Resource Architecture
+# ENML Resource Architecture
 
-> **Target Machine**: RTX 3050 6GB · 16GB RAM · i5-12450HX (12 threads) · Ubuntu 24.04
+This document describes the practical resource model for ENML on typical local hardware.
 
-## VRAM Strategy: Dynamic GPU-Process-Aware
+## Main Resource Consumers
 
-The LLM server **dynamically delegates** GPU layer offloading directly to `llama.cpp` using the native `--fit` flag:
+- `llama-server` for generation
+- sentence-transformer embedding model
+- reranker model
+- Qdrant
+- Python orchestration process
 
-1. Evaluates **total** and **free** VRAM in real-time.
-2. Senses **all active GPU processes** directly via free VRAM availability.
-3. Sets a rigid **300MB strict buffer** (`--fit-target 300`) that must never be touched.
-4. Auto-calculates safe layer capacity: Attempts to load maximum layers (`-ngl 999`), forcing the C++ engine to optimize and fit as many layers as possible into the remaining memory budget without exceeding the buffer.
+## Typical Behavior
 
-### Example Scenarios
+`llama-server` is the dominant VRAM consumer. ENML’s embedding and reranking models are usually CPU-side, which keeps more GPU memory available for the active GGUF.
 
-| GPU State | Free VRAM | Dedicated to LLM | Notes |
-|---|---|---|---|
-| Nothing running | ~5800MB | ~5500MB | Max layers offloaded; peak performance |
-| Background Apps (~2000MB) | ~3800MB | ~3500MB | Auto-scales layers down softly |
-| Heavy load (~4600MB) | ~1200MB | ~900MB | Critical fallback to CPU computation |
+## Current Server Strategy
 
-## RAM Allocation
+`run_server.sh` starts `llama-server` with:
 
-| Component | RAM |
-|---|---|
-| LLM CPU layers | 2–3 GB |
-| Memory system (Qdrant, embeddings) | 1–2 GB |
-| OS + services | 3–4 GB |
-| Free buffer | 4–5 GB |
+- `--fit on`
+- `--fit-target 300`
+- `--flash-attn on`
+- `--parallel 1`
+- `--cache-ram 2048`
+- `-c 4096`
+- `-b 512`
 
-## LLM Server Parameters
+That means:
 
-| Parameter | Value | Rationale |
-|---|---|---|
-| Context size | 4096 tokens | Saves ~500MB KV cache vs 8192; sufficient for memory injection |
-| Batch size | 512 | Reduces peak VRAM spikes |
-| Prompt Cache | 2048 MB | Reduces RAM pressure from historical state retention |
-| GPU layers | Auto (Target 999) | Adapts to available VRAM natively via `--fit` |
-| Parallel slots | 1 | Single inference stream |
-| Flash attention | On | Reduces KV cache memory |
-| Memory lock | On | Prevents OS swapping model weights |
+- layer offload is automatic
+- a 300 MB free-memory target is preserved
+- prompt cache is enabled
+- context size is capped at 4096 unless you change `.env`
 
-## Performance Philosophy
+## Why Some Models Feel Slow
 
-1. **Stability** — Never exceed safe VRAM bounds
-2. **VRAM safety margin** — Always keep definitively 300MB free using `--fit-target`
-3. **Sustained operation** — Designed for continuous uptime
-4. **Then speed** — Token/s is a secondary concern
+Usually one or more of these:
 
-> This is a **hybrid compute node**, not a GPU-only server.
-> CPU handles: remaining layers, tokenization, memory injection, RAG, orchestration.
+- not all layers fit on GPU
+- a large KV cache consumes VRAM
+- the GGUF conversion is degraded
+- the model is coder-tuned and weak for general chat
+- response token budgets are too large for small tasks
+
+## Practical Guidance
+
+- 3B to 4B models: best when you want low latency and smaller evidence windows
+- 7B class models: best balance for local chat and coding on limited VRAM
+- 9B class models: often stronger, but they may offload fewer layers and slow down depending on quant and available GPU memory
+
+## Related Scripts
+
+- `run_server.sh`
+- `run_web.sh`
+- `setup.sh`

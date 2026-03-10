@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # ═══════════════════════════════════════════════════════════════════════
 # ENML — Llama.cpp Inference Server Startup
 # ═══════════════════════════════════════════════════════════════════════
@@ -7,21 +7,64 @@
 # All configuration is read from .env
 # ═══════════════════════════════════════════════════════════════════════
 
-# Load .env
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+read_env_value() {
+    local key="$1"
+    local env_file="$SCRIPT_DIR/.env"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    local raw
+    raw=$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    raw="${raw#*=}"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    printf '%s\n' "$raw"
+}
+
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+elif [ -x "$SCRIPT_DIR/venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/venv/bin/python"
 fi
 
 # Configuration from .env
-MODELS_DIR="${MODELS_DIR:-/home/flex/ai-models}"
-LLAMA_SERVER="${LLAMA_SERVER:-/home/flex/Tools/llama.cpp/build/bin/llama-server}"
-LLAMA_URL="${LLAMA_SERVER_URL:-http://localhost:8080}"
-PORT=$(echo "$LLAMA_URL" | grep -oP ':\K[0-9]+$' || echo "8080")
+MODELS_DIR="${MODELS_DIR:-$(read_env_value MODELS_DIR || printf '/home/flex/ai-models')}"
+LLAMA_SERVER="${LLAMA_SERVER:-$(read_env_value LLAMA_SERVER || printf '/home/flex/Tools/llama.cpp/build/bin/llama-server')}"
+LLAMA_URL="${LLAMA_SERVER_URL:-$(read_env_value LLAMA_SERVER_URL || printf 'http://localhost:8080')}"
+PORT="${LLAMA_URL##*:}"
+PORT="${PORT%%/*}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+    PORT="8080"
+fi
 HOST="0.0.0.0"
-CONTEXT_SIZE="${CONTEXT_SIZE:-4096}"
+CONTEXT_SIZE="${CONTEXT_SIZE:-$(read_env_value CONTEXT_SIZE || printf '4096')}"
 BATCH_SIZE=512
+
+describe_model_template() {
+    local model_name="$1"
+    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        printf '[no] [generic] [unknown]'
+        return
+    fi
+
+    "$PYTHON_BIN" -c 'from core.prompt_templates import get_model_template_info; import sys
+info = get_model_template_info(sys.argv[1])
+mark = "ok" if info.supported else "no"
+print(f"[{mark}] [{info.family}] [{info.size_label}]", end="")' "$model_name"
+}
 
 # Scan for models and prompt user
 if [ ! -d "$MODELS_DIR" ]; then
@@ -32,7 +75,7 @@ fi
 
 echo "Scanning for models in $MODELS_DIR..."
 # Find all .gguf files
-mapfile -t models < <(find "$MODELS_DIR" -type f -name "*.gguf")
+mapfile -t models < <(find "$MODELS_DIR" -type f -name "*.gguf" | sort -f)
 
 if [ ${#models[@]} -eq 0 ]; then
     echo "✗ No .gguf models found in $MODELS_DIR"
@@ -41,7 +84,8 @@ fi
 
 echo "Available Models:"
 for i in "${!models[@]}"; do
-    echo "  [$((i+1))] $(basename "${models[$i]}")"
+    model_file="$(basename "${models[$i]}")"
+    echo "  [$((i+1))] ${model_file} $(describe_model_template "$model_file")"
 done
 
 read -p "Select a model (1-${#models[@]}): " model_idx
@@ -51,7 +95,10 @@ if ! [[ "$model_idx" =~ ^[0-9]+$ ]] || [ "$model_idx" -lt 1 ] || [ "$model_idx" 
 fi
 
 MODEL_PATH="${models[$((model_idx-1))]}"
-echo "Selected: $(basename "$MODEL_PATH")"
+MODEL_BASENAME="$(basename "$MODEL_PATH")"
+MODEL_ALIAS="${MODEL_BASENAME%.gguf}"
+MODEL_TEMPLATE_INFO="$(describe_model_template "$MODEL_BASENAME")"
+echo "Selected: ${MODEL_BASENAME} ${MODEL_TEMPLATE_INFO}"
 
 if [[ "$LLAMA_SERVER" == "/path/to/"* ]]; then
     echo "⚠ LLAMA_SERVER is not configured!"
@@ -90,7 +137,9 @@ fi
 echo "╔════════════════════════════════════════════════════════════╗"
 echo "║              ENML — Llama.cpp Server                      ║"
 echo "╚════════════════════════════════════════════════════════════╝"
-echo "  Model:     $(basename "$MODEL_PATH")"
+echo "  Model:     ${MODEL_BASENAME}"
+echo "  Alias:     ${MODEL_ALIAS}"
+echo "  Template:  ${MODEL_TEMPLATE_INFO}"
 echo "  URL:       http://localhost:$PORT"
 echo "  Context:   ${CONTEXT_SIZE} tokens | Batch: ${BATCH_SIZE}"
 echo "  Metrics:   llama.cpp metrics enabled"
@@ -122,18 +171,19 @@ echo ""
 
 # Export LD_LIBRARY_PATH so llama-server can find its shared libraries (.so files)
 LLAMA_DIR="$(dirname "$LLAMA_SERVER")"
-export LD_LIBRARY_PATH="$LLAMA_DIR:$LD_LIBRARY_PATH"
+export LD_LIBRARY_PATH="${LLAMA_DIR}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # Auto-detect local Python venv CUDA libs if present to support user-compiled llama.cpp
 NVIDIA_VENV_DIR=$(find "$(pwd)/.venv" -type d -name "nvidia" -path "*/site-packages/nvidia" -print -quit 2>/dev/null)
 if [ -n "$NVIDIA_VENV_DIR" ]; then
     for dir in "$NVIDIA_VENV_DIR"/*/lib; do
-        export LD_LIBRARY_PATH="$dir:$LD_LIBRARY_PATH"
+        export LD_LIBRARY_PATH="${dir}${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
     done
 fi
 
 "$LLAMA_SERVER" \
     -m "$MODEL_PATH" \
+    --alias "$MODEL_ALIAS" \
     -c "$CONTEXT_SIZE" \
     --fit on \
     --fit-target "$BREATHING_ROOM" \

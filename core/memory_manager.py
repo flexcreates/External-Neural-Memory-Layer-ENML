@@ -299,7 +299,7 @@ class MemoryManager:
             return MemoryType.DOCUMENT.value
         if self._is_user_identity_fact(predicate) or payload.get("namespace") == "user.identity":
             return MemoryType.IDENTITY.value
-        if predicate == "likes":
+        if predicate in {"likes", "loves"}:
             return MemoryType.PREFERENCE.value
         if payload.get("memory_type"):
             return payload["memory_type"]
@@ -426,7 +426,7 @@ class MemoryManager:
     def _resolve_memory_type_from_fact(self, predicate: str) -> str:
         if self._is_user_identity_fact(predicate):
             return MemoryType.IDENTITY.value
-        if predicate == "likes":
+        if predicate in {"likes", "loves"}:
             return MemoryType.PREFERENCE.value
         return MemoryType.FACT.value
 

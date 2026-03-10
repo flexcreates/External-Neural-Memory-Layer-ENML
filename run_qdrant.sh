@@ -1,70 +1,82 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════════════════════
-# ENML — Qdrant Vector Database Startup Script
-# ═══════════════════════════════════════════════════════════════════════
-# Manages the Qdrant Docker container lifecycle.
-# All configuration is read from .env
-# ═══════════════════════════════════════════════════════════════════════
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-# Load .env configuration
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
+
+read_env_value() {
+    local key="$1"
+    local env_file="$SCRIPT_DIR/.env"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    local raw
+    raw=$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    raw="${raw#*=}"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    printf '%s\n' "$raw"
+}
+
+QDRANT_URL="${QDRANT_URL:-$(read_env_value QDRANT_URL || printf 'http://localhost:6333')}"
+PORT="${QDRANT_URL##*:}"
+PORT="${PORT%%/*}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+    PORT="6333"
 fi
-
-# Parse port from QDRANT_URL
-QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
-PORT=$(echo "$QDRANT_URL" | grep -oP ':\K[0-9]+$' || echo "6333")
 
 CONTAINER_NAME="enml-qdrant"
-STORAGE_DIR="$(pwd)/qdrant_storage"
+STORAGE_DIR="$SCRIPT_DIR/qdrant_storage"
 
-echo "=== ENML Qdrant Startup ==="
-
-# 1. Create storage directory if missing
-if [ ! -d "$STORAGE_DIR" ]; then
-    echo "[Info] Creating storage at $STORAGE_DIR"
-    mkdir -p "$STORAGE_DIR"
+if ! command -v docker >/dev/null 2>&1; then
+    echo "Docker is required to run Qdrant."
+    exit 1
 fi
 
-# 2. Check if container already exists
-if sudo docker ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
-    # Check if running
-    if sudo docker ps --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
-        echo "[✓] Qdrant already running on port $PORT"
-        exit 0
+DOCKER_CMD="docker"
+if ! docker info >/dev/null 2>&1; then
+    if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+        DOCKER_CMD="sudo docker"
     else
-        echo "[Info] Container stopped. Starting..."
-        sudo docker start "$CONTAINER_NAME"
-        echo "[✓] Qdrant started on port $PORT"
-        exit 0
-    fi
-fi
-
-# 3. Handle port conflicts
-if command -v lsof &>/dev/null && sudo lsof -i :"$PORT" > /dev/null 2>&1; then
-    echo "[⚠] Port $PORT in use."
-    CONFLICTING=$(sudo docker ps -q --filter "publish=$PORT" 2>/dev/null)
-    if [ -n "$CONFLICTING" ]; then
-        echo "[Info] Stopping conflicting container: $CONFLICTING"
-        sudo docker stop "$CONFLICTING"
-        sudo docker rm "$CONFLICTING"
-    else
-        echo "[✗] Port $PORT used by non-Docker process. Free it manually."
+        echo "Docker is installed but not accessible for the current user."
         exit 1
     fi
 fi
 
-# 4. Start fresh container
-echo "[Info] Starting Qdrant container..."
-sudo docker run -d \
+mkdir -p "$STORAGE_DIR"
+
+echo "=== ENML Qdrant Startup ==="
+
+if $DOCKER_CMD ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
+    if $DOCKER_CMD ps --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
+        echo "Qdrant already running at ${QDRANT_URL}"
+        exit 0
+    fi
+    echo "Starting existing Qdrant container..."
+    $DOCKER_CMD start "$CONTAINER_NAME" >/dev/null
+    echo "Qdrant started at ${QDRANT_URL}"
+    exit 0
+fi
+
+if command -v lsof >/dev/null 2>&1 && lsof -i :"$PORT" >/dev/null 2>&1; then
+    echo "Port $PORT is already in use."
+    exit 1
+fi
+
+echo "Starting new Qdrant container..."
+$DOCKER_CMD run -d \
   --name "$CONTAINER_NAME" \
   -p "$PORT:6333" \
   -v "$STORAGE_DIR:/qdrant/storage" \
   --restart unless-stopped \
-  qdrant/qdrant
+  qdrant/qdrant >/dev/null
 
-echo "[✓] Qdrant running at $QDRANT_URL"
+echo "Qdrant running at ${QDRANT_URL}"

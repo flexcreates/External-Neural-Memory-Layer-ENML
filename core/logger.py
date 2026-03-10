@@ -75,9 +75,9 @@ class _LoggerConfigurator:
         logging.getLogger("sentence_transformers").setLevel(logging.ERROR)
         logging.getLogger("transformers").setLevel(logging.ERROR)
 
-        # 1. Console Handler — shows DEBUG when ENML_DEBUG=1, otherwise WARNING to keep UI clean
-        console_handler = logging.StreamHandler(sys.stdout)
-        console_handler.setLevel(logging.DEBUG if ENML_DEBUG else logging.WARNING)
+        # 1. Console Handler — keep interactive chat output clean unless debugging
+        console_handler = logging.StreamHandler(sys.stderr)
+        console_handler.setLevel(logging.DEBUG if ENML_DEBUG else logging.ERROR)
         console_handler.setFormatter(console_formatter)
         root_logger.addHandler(console_handler)
 

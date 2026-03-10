@@ -1,164 +1,144 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════════════════════
-# ENML — External Neural Memory Layer · Setup Script
-# ═══════════════════════════════════════════════════════════════════════
-# This script initializes the complete ENML environment:
-#   1. Creates Python virtual environment
-#   2. Installs dependencies
-#   3. Generates .env from template
-#   4. Creates required directory structure
-#   5. Initializes authority memory profile
-#   6. Starts Qdrant vector database
-#
-# Usage: chmod +x setup.sh && ./setup.sh
-# ═══════════════════════════════════════════════════════════════════════
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 CYAN='\033[0;36m'
 RED='\033[0;31m'
-NC='\033[0m' # No Color
+NC='\033[0m'
+
+read_env_value() {
+    local key="$1"
+    local env_file="${2:-$SCRIPT_DIR/.env}"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
+
+    local raw
+    raw=$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    raw="${raw#*=}"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    printf '%s\n' "$raw"
+}
 
 echo -e "${BOLD}${CYAN}"
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║      ENML — External Neural Memory Layer · Setup          ║"
-echo "║      Infinite Learning for Local AI Systems               ║"
+echo "║                    ENML Setup                             ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
 
-# ── Step 1: Check System Requirements ─────────────────────────────────
-echo -e "${BOLD}[1/7] Checking system requirements...${NC}"
+echo -e "${BOLD}[1/7] Checking prerequisites...${NC}"
 
-if ! command -v python3 &>/dev/null; then
-    echo -e "${RED}✗ Python 3 is required but not installed.${NC}"
-    echo "  Install: sudo apt install python3 python3-venv python3-pip"
+if ! command -v python3 >/dev/null 2>&1; then
+    echo -e "${RED}Python 3 is required.${NC}"
     exit 1
 fi
-echo -e "  ${GREEN}✓${NC} Python 3 found: $(python3 --version)"
+echo -e "  ${GREEN}Python:${NC} $(python3 --version 2>&1)"
 
-if ! command -v docker &>/dev/null; then
-    echo -e "${YELLOW}⚠ Docker not found. Qdrant vector DB requires Docker.${NC}"
-    echo "  Install: https://docs.docker.com/engine/install/"
-    echo "  You can continue setup without Docker and install it later."
-    DOCKER_AVAILABLE=false
-else
-    echo -e "  ${GREEN}✓${NC} Docker found: $(docker --version | head -c 40)"
-    DOCKER_AVAILABLE=true
+if ! python3 -m venv --help >/dev/null 2>&1; then
+    echo -e "${RED}python3-venv is required.${NC}"
+    exit 1
 fi
 
-# ── Step 2: Create Virtual Environment ─────────────────────────────────
-echo -e "\n${BOLD}[2/7] Setting up Python virtual environment...${NC}"
+if ! command -v git >/dev/null 2>&1; then
+    echo -e "${YELLOW}Git not found. This is not fatal, but recommended.${NC}"
+fi
+
+DOCKER_AVAILABLE=false
+if command -v docker >/dev/null 2>&1; then
+    DOCKER_AVAILABLE=true
+    echo -e "  ${GREEN}Docker:${NC} $(docker --version 2>&1 | head -n 1)"
+else
+    echo -e "${YELLOW}Docker not found. Qdrant startup will be skipped.${NC}"
+fi
+
+echo -e "\n${BOLD}[2/7] Creating virtual environment...${NC}"
 if [ ! -d ".venv" ]; then
     python3 -m venv .venv
-    echo -e "  ${GREEN}✓${NC} Created .venv"
+    echo -e "  ${GREEN}Created .venv${NC}"
 else
-    echo -e "  ${GREEN}✓${NC} .venv already exists"
+    echo -e "  ${GREEN}.venv already exists${NC}"
 fi
 
-# ── Step 3: Install Dependencies ───────────────────────────────────────
-echo -e "\n${BOLD}[3/7] Installing Python dependencies...${NC}"
-.venv/bin/pip install --upgrade pip -q
-.venv/bin/pip install -r requirements.txt -q
-echo -e "  ${GREEN}✓${NC} All dependencies installed"
+PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+PIP_BIN="$SCRIPT_DIR/.venv/bin/pip"
 
-# ── Step 4: Generate .env Configuration ────────────────────────────────
-echo -e "\n${BOLD}[4/7] Configuring environment...${NC}"
+echo -e "\n${BOLD}[3/7] Installing Python dependencies...${NC}"
+"$PIP_BIN" install --upgrade pip
+"$PIP_BIN" install -r requirements.txt
+echo -e "  ${GREEN}Dependencies installed${NC}"
+
+echo -e "\n${BOLD}[4/7] Preparing environment file...${NC}"
 if [ ! -f ".env" ]; then
-    if [ -f ".env.example" ]; then
-        cp .env.example .env
-        echo -e "  ${GREEN}✓${NC} Created .env from .env.example"
-    else
-        echo -e "  ${RED}✗${NC} .env.example not found!"
+    if [ ! -f ".env.example" ]; then
+        echo -e "${RED}.env.example is missing.${NC}"
         exit 1
     fi
+    cp .env.example .env
+    echo -e "  ${GREEN}Created .env from .env.example${NC}"
 else
-    echo -e "  ${GREEN}✓${NC} .env already exists (keeping your current config)"
+    echo -e "  ${GREEN}.env already exists; keeping current values${NC}"
 fi
 
-# Source .env to use its values for directory creation
-set -a
-source .env
-set +a
+MEMORY_ROOT="$(read_env_value MEMORY_ROOT "$SCRIPT_DIR/.env" || printf '%s' "$SCRIPT_DIR/memory")"
+AI_NAME="$(read_env_value AI_NAME "$SCRIPT_DIR/.env" || printf 'ENML Assistant')"
 
-# ── Step 5: Create Directory Structure ─────────────────────────────────
-echo -e "\n${BOLD}[5/7] Creating directory structure...${NC}"
-
-MEMORY_ROOT="${MEMORY_ROOT:-./memory}"
+echo -e "\n${BOLD}[5/7] Creating runtime directories...${NC}"
 dirs=(
-    "${MEMORY_ROOT}/conversations"
-    "${MEMORY_ROOT}/projects"
-    "${MEMORY_ROOT}/research"
-    "${MEMORY_ROOT}/authority"
-    "${MEMORY_ROOT}/graph"
-    "./logs"
-    "./qdrant_storage"
-    "./graph"
+    "$MEMORY_ROOT"
+    "$MEMORY_ROOT/conversations"
+    "$MEMORY_ROOT/projects"
+    "$MEMORY_ROOT/research"
+    "$MEMORY_ROOT/authority"
+    "$MEMORY_ROOT/graph"
+    "$SCRIPT_DIR/logs"
+    "$SCRIPT_DIR/qdrant_storage"
+    "$SCRIPT_DIR/graph"
 )
 
 for dir in "${dirs[@]}"; do
     mkdir -p "$dir"
 done
-echo -e "  ${GREEN}✓${NC} All directories created"
+echo -e "  ${GREEN}Directory structure ready${NC}"
 
-# ── Step 6: Initialize Authority Memory Profile ────────────────────────
-echo -e "\n${BOLD}[6/7] Initializing authority memory profile...${NC}"
-
-AI_NAME="${AI_NAME:-ENML Assistant}"
-PROFILE_FILE="${MEMORY_ROOT}/authority/profile.json"
-
+echo -e "\n${BOLD}[6/7] Initializing authority memory...${NC}"
+PROFILE_FILE="$MEMORY_ROOT/authority/profile.json"
 if [ ! -f "$PROFILE_FILE" ]; then
-    cat > "$PROFILE_FILE" << EOJSON
-{
-  "identity": {},
-  "assistant": {
-    "name": "${AI_NAME}"
-  },
-  "system": {}
-}
-EOJSON
-    echo -e "  ${GREEN}✓${NC} Created profile.json (AI Name: ${AI_NAME})"
+    printf '{\n  "user": {\n    "name": null,\n    "age": null,\n    "preferences": {}\n  },\n  "assistant": {\n    "name": "%s"\n  },\n  "system": {}\n}\n' "$AI_NAME" > "$PROFILE_FILE"
+    echo -e "  ${GREEN}Created authority profile${NC}"
 else
-    echo -e "  ${GREEN}✓${NC} profile.json already exists"
+    echo -e "  ${GREEN}Authority profile already exists${NC}"
 fi
 
-# ── Step 7: Start Qdrant ───────────────────────────────────────────────
-echo -e "\n${BOLD}[7/7] Starting Qdrant vector database...${NC}"
+echo -e "\n${BOLD}[7/7] Starting optional services...${NC}"
 if [ "$DOCKER_AVAILABLE" = true ]; then
     chmod +x run_qdrant.sh 2>/dev/null || true
-    if ./run_qdrant.sh 2>/dev/null; then
-        echo -e "  ${GREEN}✓${NC} Qdrant is running"
+    if ./run_qdrant.sh; then
+        echo -e "  ${GREEN}Qdrant ready${NC}"
     else
-        echo -e "  ${YELLOW}⚠${NC} Qdrant startup had issues (you can start it manually later)"
+        echo -e "  ${YELLOW}Qdrant did not start automatically. You can run ./run_qdrant.sh later.${NC}"
     fi
 else
-    echo -e "  ${YELLOW}⚠${NC} Skipping (Docker not available)"
+    echo -e "  ${YELLOW}Skipped Qdrant startup because Docker is unavailable.${NC}"
 fi
 
-# ── Setup Complete ─────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}${GREEN}╔════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BOLD}${GREEN}║              ✅  ENML Setup Complete!                      ║${NC}"
-echo -e "${BOLD}${GREEN}╚════════════════════════════════════════════════════════════╝${NC}"
+echo -e "${BOLD}${GREEN}Setup complete.${NC}"
 echo ""
-echo -e "${BOLD}${YELLOW}  ⚡ IMPORTANT: Update your .env file before first run!${NC}"
-echo ""
-echo -e "  ${CYAN}Required settings to configure in .env:${NC}"
-echo "  ┌─────────────────────────────────────────────────────────┐"
-echo "  │  MODELS_DIR      = /home/flex/ai-models                 │"
-echo "  │  LLAMA_SERVER    = /home/flex/Tools/llama.cpp/build/bin/llama-server │"
-echo "  │  ALLOWED_PATHS   = /your/project/dirs (comma-separated) │"
-echo "  │  AI_NAME         = Your preferred AI assistant name      │"
-echo "  └─────────────────────────────────────────────────────────┘"
-echo ""
-echo -e "  ${BOLD}Quick Start:${NC}"
-echo "  1. Edit .env with your paths:     nano .env"
-echo "  2. Start Llama server:            ./run_server.sh"
-echo "  3. Start ENML chat:               source .venv/bin/activate && python3 chat.py"
-echo ""
-echo -e "  ${BOLD}Other Commands:${NC}"
-echo "  • Reset all memory:               ./reset_memory.sh"
-echo "  • Start Qdrant only:              ./run_qdrant.sh"
-echo ""
+echo "Next steps:"
+echo "  1. Review .env"
+echo "  2. Start the model server with ./run_server.sh"
+echo "  3. Start ENML with source .venv/bin/activate && python3 chat.py"
+echo "  4. Or start the web UI with ./run_web.sh"

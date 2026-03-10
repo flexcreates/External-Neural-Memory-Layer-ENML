@@ -2,6 +2,8 @@ from typing import List
 from openai import OpenAI
 from core.config import LLAMA_SERVER_URL
 from core.logger import get_logger
+from core.llm_runtime import detect_server_model
+from core.prompt_templates import build_chat_prompt_from_messages
 
 logger = get_logger(__name__)
 
@@ -9,6 +11,7 @@ class ContextDistiller:
     """Compresses noisy retrieved memories into a dense summary before injection."""
     def __init__(self):
         self.client = OpenAI(base_url=f"{LLAMA_SERVER_URL}/v1", api_key="sk-proj-no-key")
+        self.model_name = detect_server_model(self.client)
         
     def distill(self, query: str, context_items: List[str]) -> str:
         if not context_items:
@@ -28,17 +31,21 @@ class ContextDistiller:
         user_prompt = f"User Query: {query}\n\nRaw Memories:\n{context_block}"
         
         try:
-            response = self.client.chat.completions.create(
-                model="Meta-Llama-3-8B-Instruct",
-                messages=[
+            prompt = build_chat_prompt_from_messages(
+                self.model_name,
+                [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
+                    {"role": "user", "content": user_prompt},
                 ],
+            )
+            response = self.client.completions.create(
+                model=self.model_name,
+                prompt=prompt,
                 temperature=0.0,
                 max_tokens=400
             )
             
-            distilled = response.choices[0].message.content.strip()
+            distilled = response.choices[0].text.strip()
             if "NO_RELEVANT_CONTEXT" in distilled.upper():
                 logger.info("[DISTILL] Memories were determined to be irrelevant to the query.")
                 return ""

@@ -11,8 +11,11 @@ __pycache__/
 dist/
 build/
 
-# ── Virtual Environments ─────────────────────────────────────────────
+# ── Virtual Environments / Local Env Files ───────────────────────────
 .env
+.env.local
+.env.*
+!.env.example
 .venv/
 env/
 venv/
@@ -39,8 +42,11 @@ data/
 *.bak
 *.gguf
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 htmlcov/
 .coverage
+server_test.log
 
 # ── OS Files ─────────────────────────────────────────────────────────
 Thumbs.db

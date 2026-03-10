@@ -1,32 +1,45 @@
-#!/bin/bash
-# ═══════════════════════════════════════════════════════════════════════
-# ENML — Reset Memory Script
-# ═══════════════════════════════════════════════════════════════════════
-# Clears all ENML memory: conversations, authority profile, Qdrant
-# collections, graph data, and caches.
-#
-# All paths and collection names are read from .env
-# ═══════════════════════════════════════════════════════════════════════
+#!/usr/bin/env bash
 
-set -e
+set -euo pipefail
 
-# Load .env configuration
-if [ -f .env ]; then
-    set -a
-    source .env
-    set +a
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$SCRIPT_DIR"
 
-# Configuration from .env (with defaults)
-MEMORY_ROOT="${MEMORY_ROOT:-./memory}"
-QDRANT_URL="${QDRANT_URL:-http://localhost:6333}"
-AI_NAME="${AI_NAME:-ENML Assistant}"
+read_env_value() {
+    local key="$1"
+    local env_file="$SCRIPT_DIR/.env"
+    if [ ! -f "$env_file" ]; then
+        return 1
+    fi
 
-QDRANT_KNOWLEDGE="${QDRANT_KNOWLEDGE_COLLECTION:-knowledge_collection}"
-QDRANT_CONVERSATION="${QDRANT_CONVERSATION_COLLECTION:-conversation_collection}"
-QDRANT_RESEARCH="${QDRANT_RESEARCH_COLLECTION:-research_collection}"
-QDRANT_PROJECT="${QDRANT_PROJECT_COLLECTION:-project_collection}"
-QDRANT_PROFILE="${QDRANT_PROFILE_COLLECTION:-profile_collection}"
+    local raw
+    raw=$(grep -E "^${key}=" "$env_file" | tail -n 1 || true)
+    if [ -z "$raw" ]; then
+        return 1
+    fi
+
+    raw="${raw#*=}"
+    raw="${raw%\"}"
+    raw="${raw#\"}"
+    raw="${raw%\'}"
+    raw="${raw#\'}"
+    printf '%s\n' "$raw"
+}
+
+run_docker() {
+    if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+        docker "$@"
+        return
+    fi
+    if command -v sudo >/dev/null 2>&1 && sudo docker info >/dev/null 2>&1; then
+        sudo docker "$@"
+        return
+    fi
+    return 1
+}
+
+MEMORY_ROOT="${MEMORY_ROOT:-$(read_env_value MEMORY_ROOT || printf '%s' "$SCRIPT_DIR/memory")}"
+AI_NAME="${AI_NAME:-$(read_env_value AI_NAME || printf 'ENML Assistant')}"
 
 BOLD='\033[1m'
 GREEN='\033[0;32m'
@@ -36,18 +49,22 @@ NC='\033[0m'
 
 echo -e "${RED}${BOLD}"
 echo "╔════════════════════════════════════════════════════════════╗"
-echo "║          ⚠️  ENML Memory Reset                            ║"
+echo "║                  ENML Memory Reset                        ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo -e "${NC}"
-echo "  This will permanently delete:"
-echo "  • ${MEMORY_ROOT}/conversations/*"
-echo "  • ${MEMORY_ROOT}/projects/*"
-echo "  • ${MEMORY_ROOT}/research/*"
-echo "  • ${MEMORY_ROOT}/authority/profile.json"
-echo "  • ${MEMORY_ROOT}/graph/*"
-echo "  • Qdrant Docker container and all local Qdrant storage files"
+echo "This will permanently delete:"
+echo "  - ${MEMORY_ROOT}/conversations/*"
+echo "  - ${MEMORY_ROOT}/projects/*"
+echo "  - ${MEMORY_ROOT}/research/*"
+echo "  - ${MEMORY_ROOT}/graph/*"
+echo "  - ${MEMORY_ROOT}/records/*"
+echo "  - ${MEMORY_ROOT}/authority/profile.json"
+echo "  - ./qdrant_storage/*"
+echo "  - ./logs/*"
+echo "  - local Python caches"
+echo "  - the Qdrant Docker container named enml-qdrant, if present"
 echo ""
-read -p "Are you sure you want to proceed? (y/N): " confirm
+read -r -p "Are you sure you want to proceed? (y/N): " confirm
 
 if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
     echo "Aborted."
@@ -55,66 +72,46 @@ if [[ "$confirm" != "y" && "$confirm" != "Y" ]]; then
 fi
 
 echo ""
-echo -e "${BOLD}Clearing memory...${NC}"
+echo -e "${BOLD}Clearing ENML state...${NC}"
 
-# Clear conversation history
-if [ -d "${MEMORY_ROOT}/conversations" ]; then
-    rm -rf "${MEMORY_ROOT}/conversations"/*
-    echo -e "  ${GREEN}✓${NC} Cleared conversations"
-fi
+clear_dir() {
+    local dir="$1"
+    local label="$2"
+    if [ -d "$dir" ]; then
+        find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+        echo -e "  ${GREEN}${label}${NC}"
+    fi
+}
 
-# Clear projects
-if [ -d "${MEMORY_ROOT}/projects" ]; then
-    rm -rf "${MEMORY_ROOT}/projects"/*
-    echo -e "  ${GREEN}✓${NC} Cleared projects"
-fi
+clear_dir "${MEMORY_ROOT}/conversations" "Cleared conversations"
+clear_dir "${MEMORY_ROOT}/projects" "Cleared projects"
+clear_dir "${MEMORY_ROOT}/research" "Cleared research data"
+clear_dir "${MEMORY_ROOT}/graph" "Cleared graph data"
+clear_dir "${MEMORY_ROOT}/records" "Cleared memory records"
+clear_dir "$SCRIPT_DIR/logs" "Cleared logs"
 
-# Clear research
-if [ -d "${MEMORY_ROOT}/research" ]; then
-    rm -rf "${MEMORY_ROOT}/research"/*
-    echo -e "  ${GREEN}✓${NC} Cleared research data"
-fi
-
-# Clear graph data
-if [ -d "${MEMORY_ROOT}/graph" ]; then
-    rm -rf "${MEMORY_ROOT}/graph"/*
-    echo -e "  ${GREEN}✓${NC} Cleared graph data"
-fi
-
-# Reset authority profile (preserves AI name from .env)
 AUTHORITY_DIR="${MEMORY_ROOT}/authority"
 PROFILE_FILE="${AUTHORITY_DIR}/profile.json"
 mkdir -p "$AUTHORITY_DIR"
-cat > "$PROFILE_FILE" << EOJSON
-{
-  "user": {},
-  "assistant": {
-    "name": "${AI_NAME}"
-  },
-  "system": {}
-}
-EOJSON
-echo -e "  ${GREEN}✓${NC} Reset authority profile (AI Name: ${AI_NAME})"
+printf '{\n  "user": {\n    "name": null,\n    "age": null,\n    "preferences": {}\n  },\n  "assistant": {\n    "name": "%s"\n  },\n  "system": {}\n}\n' "$AI_NAME" > "$PROFILE_FILE"
+echo -e "  ${GREEN}Reset authority profile${NC}"
 
-# Hard reset Qdrant storage
-echo -e "\n${BOLD}Hard-resetting Qdrant vector database...${NC}"
+echo -e "\n${BOLD}Resetting Qdrant storage...${NC}"
 CONTAINER_NAME="enml-qdrant"
-if sudo docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Eq "^${CONTAINER_NAME}\$"; then
-    echo "  [Info] Stopping and removing Qdrant container..."
-    sudo docker stop "$CONTAINER_NAME" > /dev/null
-    sudo docker rm "$CONTAINER_NAME" > /dev/null
-    echo -e "  ${GREEN}✓${NC} Removed Qdrant container"
+if run_docker ps -a --format '{{.Names}}' 2>/dev/null | grep -Eq "^${CONTAINER_NAME}\$"; then
+    run_docker stop "$CONTAINER_NAME" >/dev/null || true
+    run_docker rm "$CONTAINER_NAME" >/dev/null || true
+    echo -e "  ${GREEN}Removed Qdrant container${NC}"
+else
+    echo -e "  ${YELLOW}Qdrant container not present${NC}"
 fi
 
-if [ -d "qdrant_storage" ]; then
-    sudo rm -rf qdrant_storage/* 2>/dev/null || true
-    echo -e "  ${GREEN}✓${NC} Deleted all Qdrant local storage data"
-fi
+clear_dir "$SCRIPT_DIR/qdrant_storage" "Deleted local Qdrant storage"
 
-# Clean Python caches
-find . -not -path "*/.venv/*" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
-echo -e "  ${GREEN}✓${NC} Cleared Python caches"
+find "$SCRIPT_DIR" -not -path "*/.venv/*" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
+find "$SCRIPT_DIR" -not -path "*/.venv/*" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true
+echo -e "  ${GREEN}Cleared Python caches${NC}"
 
 echo ""
-echo -e "${GREEN}${BOLD}✨ Memory reset complete. ENML is fresh and ready to learn.${NC}"
-echo ""
+echo -e "${GREEN}${BOLD}ENML memory reset complete.${NC}"
+echo "The next run will start from a clean local state."

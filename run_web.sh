@@ -40,6 +40,9 @@ read_env_value() {
 PORT="${WEB_SERVER_PORT:-$(read_env_value WEB_SERVER_PORT || printf '5000')}"
 QDRANT_URL="${QDRANT_URL:-$(read_env_value QDRANT_URL || printf 'http://localhost:6333')}"
 LLAMA_URL="${LLAMA_SERVER_URL:-$(read_env_value LLAMA_SERVER_URL || printf 'http://localhost:8080')}"
+if ! [[ "$PORT" =~ ^[0-9]+$ ]]; then
+    PORT="5000"
+fi
 
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 if [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
@@ -95,6 +98,9 @@ if [ -n "$ACTIVE_MODEL" ]; then
     export REASONING_CHAT_MODEL="$ACTIVE_MODEL"
 fi
 
+export WEB_SERVER_PORT="$PORT"
+export QDRANT_URL="${QDRANT_URL%/}"
+export LLAMA_SERVER_URL="${LLAMA_URL%/}"
 export PYTHONUNBUFFERED=1
 
 echo "╔════════════════════════════════════════════════════════════╗"
@@ -111,4 +117,4 @@ echo "  Pipeline: ENML memory + evidence grounding + runtime metrics"
 echo "  Debug:    /api/debug/retrieve /api/debug/runtime-metrics /api/debug/citation-metrics"
 echo ""
 
-"$PYTHON_BIN" web_server.py
+exec "$PYTHON_BIN" web_server.py

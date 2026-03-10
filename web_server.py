@@ -150,6 +150,7 @@ def chat():
             # Send summary to LLM
             summary_msg = f"I just pasted a document ({line_count} lines). Please acknowledge that you've received it."
             try:
+                full_response = ""
                 response_stream = orchestrator.process_message(
                     user_input=summary_msg,
                     session_id=session_id,
@@ -160,8 +161,10 @@ def chat():
                 for chunk in response_stream:
                     chunk_data = json.dumps({"type": "content", "content": chunk})
                     yield f"data: {chunk_data}\n\n"
+                    full_response += chunk
                 
                 history.append({"role": "user", "content": f"[Document pasted: {line_count} lines]"})
+                history.append({"role": "assistant", "content": full_response})
             except Exception as e:
                 err_data = json.dumps({"type": "error", "content": str(e)})
                 yield f"data: {err_data}\n\n"
