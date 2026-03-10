@@ -64,27 +64,17 @@ if [ ! -x "$LLAMA_SERVER" ]; then
 fi
 
 # ── Dynamic VRAM Layer Offloading (GPU-Process-Aware) ────────────────
-# Reads actual free VRAM, detects all GPU processes, and calculates
-# optimal layers dynamically. Leaves exactly BREATHING_ROOM for stability.
+# Delegates exact layer fitting to llama.cpp using native --fit flags.
+# Leaves exactly BREATHING_ROOM free regardless of model size or processes.
 BREATHING_ROOM=300           # MB — strict buffer to always keep free
-LAYER_SIZE_MB=140            # Approx VRAM per offloaded layer
-MAX_LAYERS=22                # Safety ceiling
 
 if command -v nvidia-smi &>/dev/null; then
     TOTAL_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
     FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1)
     USED_VRAM=$((TOTAL_VRAM - FREE_VRAM))
     
-    # Dynamically use all remaining free VRAM minus the strict breathing room.
-    # If the automation system is running, FREE_VRAM is lower, so LLM takes less.
-    # If offline, FREE_VRAM is high, so LLM takes more.
-    AVAILABLE=$((FREE_VRAM - BREATHING_ROOM))
-    if [ "$AVAILABLE" -lt 0 ]; then AVAILABLE=0; fi
-
-    OPTIMAL=$((AVAILABLE / LAYER_SIZE_MB))
-    FINAL_NGL=$((OPTIMAL < MAX_LAYERS ? OPTIMAL : MAX_LAYERS))
-    if [ "$FINAL_NGL" -lt 0 ]; then FINAL_NGL=0; fi
-
+    FINAL_NGL=999 # Max theoretical layers; llama.cpp will scale it down automatically
+    
     # Detect GPU processes for the startup report
     GPU_PROCS=$(nvidia-smi --query-compute-apps=pid,process_name,used_memory --format=csv,noheader,nounits 2>/dev/null || echo "")
 else
@@ -109,9 +99,9 @@ if [ "$TOTAL_VRAM" != "N/A" ]; then
     echo "  Total:     ${TOTAL_VRAM}MB"
     echo "  Used:      ${USED_VRAM}MB (by other processes)"
     echo "  Free:      ${FREE_VRAM}MB"
-    echo "  Reserved:  ${BREATHING_ROOM}MB (strict buffer)"
-    echo "  Budget:    ${AVAILABLE}MB available for LLM"
-    echo "  Layers:    ${FINAL_NGL} GPU layers (dynamic, max ${MAX_LAYERS})"
+    echo "  Reserved:  ${BREATHING_ROOM}MB (strict buffer via llama.cpp)"
+    echo "  Budget:    Dynamic (managed precisely by llama.cpp)"
+    echo "  Layers:    Max threshold with auto-fallback (-ngl 999)"
     echo ""
     if [ -n "$GPU_PROCS" ]; then
         echo "  ── Active GPU Processes ──"
@@ -145,6 +135,8 @@ fi
     -m "$MODEL_PATH" \
     -c "$CONTEXT_SIZE" \
     -ngl "$FINAL_NGL" \
+    --fit on \
+    --fit-target "$BREATHING_ROOM" \
     -b "$BATCH_SIZE" \
     --cache-ram 2048 \
     --parallel 1 \
