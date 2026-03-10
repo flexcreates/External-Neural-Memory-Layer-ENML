@@ -126,6 +126,10 @@ else
 fi
 echo ""
 
+# Export LD_LIBRARY_PATH so llama-server can find its shared libraries (.so files)
+LLAMA_DIR="$(dirname "$LLAMA_SERVER")"
+export LD_LIBRARY_PATH="$LLAMA_DIR:$LD_LIBRARY_PATH"
+
 "$LLAMA_SERVER" \
     -m "$MODEL_PATH" \
     -c "$CONTEXT_SIZE" \
