@@ -6,6 +6,7 @@ from .logger import get_logger
 from .context.distiller import ContextDistiller
 from .context.prompt_budget_manager import PromptBudgetManager
 from .memory.types import EvidencePacket, MemoryType
+from .prompt_templates import build_chat_prompt
 
 logger = get_logger(__name__)
 
@@ -21,9 +22,10 @@ class ContextBuilder:
                       history: List[Dict[str, str]], 
                       system_prompt: str = "You are a persistent AI assistant named Jarvis.",
                       max_context_tokens: int = 3000,
-                      model_profile = None) -> Tuple[List[Dict[str, str]], float]:
+                      model_profile = None,
+                      model_name: str = "") -> Tuple[str, float]:
         """
-        Builds the context and returns messages & temperature based on query mode.
+        Builds the grounded prompt string and returns it with temperature.
         """
         logger.info(f"[INJECT] Building context for: '{user_input[:60]}'")
         budget_manager = PromptBudgetManager(max_context_tokens)
@@ -134,9 +136,7 @@ class ContextBuilder:
         # This injects the permanent AI/User identity.json strings BEFORE the history.
         effective_system_prompt = self.memory_manager.authority_memory.get_injected_prompt(effective_system_prompt)
         logger.debug(f"[INJECT] Authority memory injected into prompt")
-        messages = [{"role": "system", "content": effective_system_prompt}]
-        
-        # 4. Append Conversation History (with token budget enforcement)
+        # 5. Append Conversation History (with token budget enforcement)
         SLIDING_WINDOW_COUNT = 12
         recent_history = history[-SLIDING_WINDOW_COUNT:] if len(history) > SLIDING_WINDOW_COUNT else history
         
@@ -155,12 +155,21 @@ class ContextBuilder:
             trimmed_history.insert(0, msg)
             running_tokens += msg_tokens
         
-        messages.extend(trimmed_history)
-        
-        logger.info(f"[PROMPT] Final context: {len(messages)} messages, ~{system_tokens + running_tokens + user_tokens} tokens, temp={temperature}")
+        prompt_text = build_chat_prompt(
+            model_name=model_name,
+            system_prompt=effective_system_prompt,
+            conversation_history=trimmed_history,
+            user_message=user_input,
+        )
+
+        logger.info(
+            f"[PROMPT] Final prompt: {1 + len(trimmed_history) + 1} messages, "
+            f"~{system_tokens + running_tokens + user_tokens} source tokens, temp={temperature}"
+        )
         logger.debug(f"[PROMPT] System prompt preview: {effective_system_prompt[:300]}...")
+        logger.debug(f"[PROMPT] Final prompt preview: {prompt_text[:400]}...")
         
-        return messages, temperature
+        return prompt_text, temperature
 
     def _build_user_preference_rules(self) -> str:
         profile = self.memory_manager.authority_memory.load()

@@ -71,27 +71,25 @@ class Orchestrator:
         model_name = self.model_router.route(user_input)
         model_profile = self.model_router.get_profile(model_name)
         context_start = time.perf_counter()
-        full_context, temperature = self.context_builder.build_context(
+        prompt_text, temperature = self.context_builder.build_context(
             user_input,
             history,
             system_prompt=system_prompt,
             model_profile=model_profile,
+            model_name=model_name,
         )
         context_ms = (time.perf_counter() - context_start) * 1000
         
-        # Append current user message if not already in history
-        # (It shouldn't be in history yet if we want to save it strictly after)
-        full_context.append({"role": "user", "content": user_input})
-        
         # 4. Call LLM
-        logger.info(f"[LLM] Calling model={model_name}, temp={temperature}, messages={len(full_context)}")
-        if full_context and full_context[0].get("role") == "system":
-            logger.debug(f"[LLM] System prompt preview: {full_context[0]['content'][:400]}...")
+        logger.info(
+            f"[LLM] Calling model={model_name}, temp={temperature}, prompt_chars={len(prompt_text)}"
+        )
+        logger.debug(f"[LLM] Prompt preview: {prompt_text[:400]}...")
         try:
             llm_start = time.perf_counter()
-            stream = self.client.chat.completions.create(
+            stream = self.client.completions.create(
                 model=model_name,
-                messages=full_context,
+                prompt=prompt_text,
                 stream=True,
                 temperature=temperature,
                 top_p=0.9,
@@ -100,8 +98,8 @@ class Orchestrator:
             
             full_response = ""
             for chunk in stream:
-                if chunk.choices[0].delta.content:
-                    content = chunk.choices[0].delta.content
+                content = chunk.choices[0].text or ""
+                if content:
                     yield content
                     full_response += content
 

@@ -294,14 +294,12 @@ def debug_retrieve():
         
         # Step 3: Build context (without LLM call)
         system_prompt = f"You are {AI_NAME} {AI_HINT}.\nKeep answers concise and efficient.\n"
-        full_context, temperature = orchestrator.context_builder.build_context(
-            query, [], system_prompt=system_prompt
+        prompt_text, temperature = orchestrator.context_builder.build_context(
+            query,
+            [],
+            system_prompt=system_prompt,
+            model_name=orchestrator.model_router.route(query),
         )
-        
-        # Extract system prompt from built context
-        sys_prompt_content = ""
-        if full_context and full_context[0].get("role") == "system":
-            sys_prompt_content = full_context[0]["content"]
         
         return jsonify({
             "query": query,
@@ -310,8 +308,8 @@ def debug_retrieve():
             "documents": retrieval_data["documents"],
             "document_count": len(retrieval_data["documents"]),
             "temperature": temperature,
-            "system_prompt_preview": sys_prompt_content[:500],
-            "system_prompt_length": len(sys_prompt_content),
+            "prompt_preview": prompt_text[:500],
+            "prompt_length": len(prompt_text),
         })
     except Exception as e:
         logger.error(f"Debug retrieve endpoint error: {e}")
