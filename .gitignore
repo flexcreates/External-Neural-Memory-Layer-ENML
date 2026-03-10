@@ -1,0 +1,47 @@
+# ═══════════════════════════════════════════════════════════════════════
+# ENML — .gitignore
+# ═══════════════════════════════════════════════════════════════════════
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# ── Virtual Environments ─────────────────────────────────────────────
+.env
+.venv/
+env/
+venv/
+ENV/
+
+# ── Memory & Data (user-specific, never commit) ──────────────────────
+memory/
+qdrant_storage/
+graph/
+logs/
+data/
+
+# ── IDE & Editor ─────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# ── Temporary / Build ────────────────────────────────────────────────
+*.log
+*.tmp
+*.bak
+*.gguf
+.pytest_cache/
+htmlcov/
+.coverage
+
+# ── OS Files ─────────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
