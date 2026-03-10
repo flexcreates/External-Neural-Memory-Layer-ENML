@@ -36,8 +36,8 @@ QDRANT_KNOWLEDGE_COLLECTION = os.getenv("QDRANT_KNOWLEDGE_COLLECTION", "knowledg
 QDRANT_DOCUMENT_COLLECTION = os.getenv("QDRANT_DOCUMENT_COLLECTION", "document_collection")
 
 # Model configuration
-EMBEDDING_MODEL = os.getenv("EMBED_MODEL", "all-MiniLM-L6-v2")
-EMBED_DIM = int(os.getenv("EMBED_DIM", 384))
+EMBEDDING_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
+EMBED_DIM = int(os.getenv("EMBED_DIM", 768))
 LLAMA_SERVER_URL = os.getenv("LLAMA_SERVER_URL", "http://localhost:8080")
 AI_NAME = os.getenv("AI_NAME", "ENML Assistant")
 AI_HINT = os.getenv("AI_HINT", "running on local hardware")

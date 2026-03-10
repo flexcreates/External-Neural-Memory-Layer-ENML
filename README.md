@@ -360,10 +360,13 @@ ENML/
 - [x] CPU-optimized embedding model (VRAM reserved for LLM)
 - [x] Document summarization pipeline (LLM-powered section summaries)
 - [x] Confidence-scored retrieval with threshold filtering
+- [x] Hybrid Search (Dense Vectors + BM25 Sparse Keywords)
+- [x] Cross-Encoder Reranking
+- [x] Contextual Memory Distillation (LLM-based compression)
+- [x] Memory decay and confidence aging
+- [x] Episodic Conversation Summarization
 - [ ] Web research ingestion pipeline
 - [ ] Multi-modal memory (images, documents)
-- [ ] Conversation summarization
-- [ ] Memory decay and confidence aging
 - [ ] Plugin system for custom extractors
 
 ---

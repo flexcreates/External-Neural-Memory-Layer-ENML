@@ -65,8 +65,9 @@ fi
 
 # ── Dynamic VRAM Layer Offloading (GPU-Process-Aware) ────────────────
 # Reads actual free VRAM, detects all GPU processes, and calculates
-# optimal layers dynamically. Leaves BREATHING_ROOM for stability.
+# optimal layers dynamically. Leaves BREATHING_ROOM + AUTOMATION_RESERVE for stability.
 BREATHING_ROOM=500           # MB — always keep free for stability
+AUTOMATION_RESERVE=2048      # MB — reserve for future automation system
 LAYER_SIZE_MB=140            # Approx VRAM per offloaded layer
 MAX_LAYERS=22                # Safety ceiling
 
@@ -74,7 +75,7 @@ if command -v nvidia-smi &>/dev/null; then
     TOTAL_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
     FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1)
     USED_VRAM=$((TOTAL_VRAM - FREE_VRAM))
-    AVAILABLE=$((FREE_VRAM - BREATHING_ROOM))
+    AVAILABLE=$((FREE_VRAM - BREATHING_ROOM - AUTOMATION_RESERVE))
     if [ "$AVAILABLE" -lt 0 ]; then AVAILABLE=0; fi
 
     OPTIMAL=$((AVAILABLE / LAYER_SIZE_MB))
@@ -105,7 +106,7 @@ if [ "$TOTAL_VRAM" != "N/A" ]; then
     echo "  Total:     ${TOTAL_VRAM}MB"
     echo "  Used:      ${USED_VRAM}MB (by other processes)"
     echo "  Free:      ${FREE_VRAM}MB"
-    echo "  Reserved:  ${BREATHING_ROOM}MB (breathing room)"
+    echo "  Reserved:  $((BREATHING_ROOM + AUTOMATION_RESERVE))MB (${BREATHING_ROOM}MB buffer + ${AUTOMATION_RESERVE}MB automation)"
     echo "  Budget:    ${AVAILABLE}MB available for LLM"
     echo "  Layers:    ${FINAL_NGL} GPU layers (dynamic, max ${MAX_LAYERS})"
     echo ""

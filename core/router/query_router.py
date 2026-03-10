@@ -3,75 +3,69 @@ from core.config import (
     QDRANT_RESEARCH_COLLECTION,
     QDRANT_PROJECT_COLLECTION,
     QDRANT_CONVERSATION_COLLECTION,
-    QDRANT_KNOWLEDGE_COLLECTION
+    QDRANT_KNOWLEDGE_COLLECTION,
+    QDRANT_DOCUMENT_COLLECTION,
+    LLAMA_SERVER_URL
 )
 from core.logger import get_logger
+from openai import OpenAI
 
 logger = get_logger(__name__)
 
 class QueryRouter:
-    """Routes queries to correct Qdrant collection or Identity memory."""
+    """Routes queries to correct Qdrant collection based on LLM intent classification."""
     def __init__(self):
-        pass
+        self.client = OpenAI(base_url=f"{LLAMA_SERVER_URL}/v1", api_key="sk-proj-no-key")
 
     def route(self, query: str) -> str:
         """
-        Determines the target collection or domain based on query analysis.
-        Priority order: identity > document/content > project > research > conversation
+        Classify the query into one of 5 intents and return the corresponding collection.
+        If classification fails, fallback to heuristics.
         """
-        query_lower = query.lower()
+        system_prompt = (
+            "You are a sophisticated query intent classifier. Classify the user's query into EXACTLY ONE of the following tags:\n"
+            "- 'personal_question': The user is asking about themselves, their identity, specs, hobbies, or the AI's identity.\n"
+            "- 'project_question': The user is asking about a codebase, scripts, programming, architecture, or system.\n"
+            "- 'document_question': The user is asking about specific documents, notes, readmes, or text files.\n"
+            "- 'research_question': The user is asking about general concepts, academic topics, frameworks, or web knowledge.\n"
+            "- 'general_knowledge': The user is asking a basic conversation question or something not related to personal memory, projects, or documents.\n\n"
+            "Respond ONLY with the exact string tag and nothing else."
+        )
         
-        # ── Priority 1: Identity / personal facts ──
-        # Highest priority to prevent 'what is my' being hijacked by 'what is' research
-        identity_keywords = [
-            "who am i", "my name", "my pc", "my specs", "my father", 
-            "my mother", "my condition", "what do i like", "do i have", 
-            "my hobbies", "my friend", "my best friend", "what is my",
-            "about me", "my pet", "my device", "my laptop", "my computer",
-        ]
-        for kw in identity_keywords:
-            if kw in query_lower:
-                logger.info(f"[ROUTE] Matched identity keyword '{kw}' → {QDRANT_KNOWLEDGE_COLLECTION}")
-                return QDRANT_KNOWLEDGE_COLLECTION
-        
-        # ── Priority 2: Document / content queries ──
-        # Queries ABOUT ingested documents should search knowledge (also triggers hybrid chunk search)
-        content_keywords = [
-            "folder structure", "project structure", "file structure",
-            "how does it work", "how it works", "workflow", "features",
-            "about the project", "about enml", "about this project",
-            "tell me about", "facts about", "what does it do",
-            "components", "overview", "summary", "describe",
-        ]
-        for kw in content_keywords:
-            if kw in query_lower:
-                logger.info(f"[ROUTE] Matched content keyword '{kw}' → {QDRANT_KNOWLEDGE_COLLECTION}")
-                return QDRANT_KNOWLEDGE_COLLECTION
+        try:
+            response = self.client.chat.completions.create(
+                model="Meta-Llama-3-8B-Instruct",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"Query:\n{query}"}
+                ],
+                temperature=0.0,
+                max_tokens=15
+            )
+            intent = response.choices[0].message.content.strip().lower()
+            logger.info(f"[ROUTE] LLM classified intent: {intent}")
             
-        # ── Priority 3: Project/code routing ──
-        project_keywords = [
-            "codebase", "implemented", "script", ".py", "function", "class", "module", 
-            "source code", "git", "project", "app", "application", "repo", "repository", 
-            "system", "architecture"
-        ]
-        for kw in project_keywords:
-            if kw in query_lower:
-                logger.info(f"[ROUTE] Matched project keyword '{kw}' → {QDRANT_PROJECT_COLLECTION}")
+            if "personal_question" in intent:
+                return QDRANT_KNOWLEDGE_COLLECTION
+            elif "project_question" in intent:
                 return QDRANT_PROJECT_COLLECTION
-            
-        # ── Priority 4: Research routing ──
-        # More specific patterns to avoid hijacking document queries
-        research_keywords = [
-            "explain the concept", "how does a", "what is a", "what is the",
-            "documentation for", "article about", "theory of", "paper on",
-            "research on", "study about", "research", "paper", "study", 
-            "framework", "concept", "article"
-        ]
-        for kw in research_keywords:
-            if kw in query_lower:
-                logger.info(f"[ROUTE] Matched research keyword '{kw}' → {QDRANT_RESEARCH_COLLECTION}")
+            elif "document_question" in intent:
+                return QDRANT_DOCUMENT_COLLECTION
+            elif "research_question" in intent:
                 return QDRANT_RESEARCH_COLLECTION
+            elif "general_knowledge" in intent:
+                return QDRANT_KNOWLEDGE_COLLECTION # fallback
+                
+        except Exception as e:
+            logger.warning(f"[ROUTE] LLM classification failed: {e}. Falling back to default.")
+
+        query_lower = query.lower()
+        project_keywords = ["code", "script", "project", "app"]
+        if any(kw in query_lower for kw in project_keywords):
+            return QDRANT_PROJECT_COLLECTION
             
-        # Fallback to knowledge (instead of conversation) for better hybrid retrieval
-        logger.info(f"[ROUTE] No keyword match, fallback → {QDRANT_KNOWLEDGE_COLLECTION}")
+        research_keywords = ["explain", "what is a", "how does"]
+        if any(kw in query_lower for kw in research_keywords):
+            return QDRANT_RESEARCH_COLLECTION
+
         return QDRANT_KNOWLEDGE_COLLECTION

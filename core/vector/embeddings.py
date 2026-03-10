@@ -31,3 +31,23 @@ class EmbeddingService:
     def embed(self, text: str) -> list[float]:
         """Generates a dense vector embedding for the given text."""
         return self.model.encode(text).tolist()
+
+class SparseEmbeddingService:
+    """Singleton wrapper around fastembed BM25 SparseTextEmbedding."""
+    _instance = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            with _lock:
+                if cls._instance is None:
+                    from fastembed import SparseTextEmbedding
+                    instance = super().__new__(cls)
+                    logger.info("Loading sparse embedding model: Qdrant/bm25")
+                    instance.model = SparseTextEmbedding("Qdrant/bm25")
+                    cls._instance = instance
+        return cls._instance
+
+    def embed(self, text: str):
+        """Generates a sparse vector embedding (indices & values)."""
+        result = list(self.model.embed([text]))[0]
+        return result.indices.tolist(), result.values.tolist()

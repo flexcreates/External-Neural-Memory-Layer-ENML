@@ -47,11 +47,11 @@ nano .env
 Open **three terminals** in the ENML directory:
 
 ```bash
-# Terminal 1: Start the vector database
-./run_qdrant.sh
-
-# Terminal 2: Start the LLM server
+# Terminal 1: Start the dynamic LLM server (auto-detects models and VRAM)
 ./run_server.sh
+
+# Terminal 2: Start the vector database
+./run_qdrant.sh
 
 # Terminal 3: Start the chat
 source .venv/bin/activate
@@ -61,6 +61,8 @@ python3 chat.py
 You should see:
 ```
 Initializing ENML Orchestrator...
+Scanning for models in /home/flex/ai-models...
+[Select your model...]
 --- Chat Started (Session: session_20260222_190000) ---
 Type 'exit' to quit, '/remember <text>' to save a fact.
 
@@ -133,11 +135,14 @@ You: what are my hobbies?
 AI: You enjoy vibe coding and creating art.
 ```
 
-### How It Works
-1. Your question is routed to the `knowledge_collection` (identity queries) or `research_collection` (factual queries)
-2. The top matching facts are retrieved and injected into the system prompt
-3. The AI is instructed to answer ONLY from the retrieved facts
-4. If no relevant fact exists, the AI will say "I don't know" instead of guessing
+### How It Works (The 5-Step Recall)
+1. **Query Intent Routing**: The system classifies your query to search the right memory silo (`knowledge`, `project`, `research`, etc.).
+2. **Hybrid Search**: The system queries Qdrant using both dense semantic vectors (`BGE-base-en-v1.5`) and sparse keyword matching (`BM25`) to find up to 20 candidate memories.
+3. **Memory Aging**: Older facts with low confidence naturally decay in score over time, while highly confident facts remain resilient.
+4. **Cross-Encoder Reranking**: The retrieved memories are strictly re-scored alongside your query using `BAAI/bge-reranker-base` to surface the absolute most relevant points.
+5. **Context Distillation**: If multiple fragmented memories are found, they are routed to the `ContextDistiller` to be compressed into a dense bullet-point summary before being injected into the final prompt.
+
+If no relevant fact exists that passes the confidence thresholds, the AI will say "I don't know" instead of hallucinating.
 
 ---
 
@@ -278,9 +283,9 @@ for res in results:
 
 ### Out of memory / slow responses
 **Causes:**
-- VRAM exhausted — reduce `-ngl` layers in `run_server.sh`
-- Context too large — the system auto-trims, but very long sessions can be heavy
-- Embedding model loading — first run downloads ~90 MB model (cached afterward)
+- VRAM exhausted — ENML automatically reserves 500MB as a hard buffer and 2GB for future automation systems. If you still run OOM, ensure no other background applications are dominating the GPU.
+- Context too large — the system auto-trims and uses Context Distillation to shrink memories, but very long copy-pasted blocks can be heavy.
+- Embedding module loading — The first run downloads the `bge-base-en` and reranker models (~350MB). They run purely on CPU to save VRAM for the main LLM.
 
 ### Docker permission errors
 ```bash

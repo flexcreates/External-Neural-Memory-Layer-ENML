@@ -41,17 +41,22 @@ class QdrantManager:
         return cls._instance
 
     def _ensure_collections(self):
-        """Creates any missing Qdrant collections with COSINE distance."""
+        """Creates any missing Qdrant collections with dense and sparse configured."""
         for collection_name in self.collections:
             try:
                 if not self.client.collection_exists(collection_name):
-                    logger.info(f"Creating missing Qdrant collection: {collection_name}")
+                    logger.info(f"Creating missing Qdrant collection (Hybrid): {collection_name}")
                     self.client.create_collection(
                         collection_name=collection_name,
-                        vectors_config=models.VectorParams(
-                            size=EMBED_DIM,
-                            distance=models.Distance.COSINE
-                        )
+                        vectors_config={
+                            "dense": models.VectorParams(
+                                size=EMBED_DIM,
+                                distance=models.Distance.COSINE
+                            )
+                        },
+                        sparse_vectors_config={
+                            "sparse": models.SparseVectorParams()
+                        }
                     )
             except Exception as e:
                 logger.error(f"Failed to ensure collection '{collection_name}': {e}")

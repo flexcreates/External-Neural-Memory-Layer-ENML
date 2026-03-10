@@ -3,12 +3,14 @@ import re
 from .memory_manager import MemoryManager
 from .time_provider import TimeProvider
 from .logger import get_logger
+from .context.distiller import ContextDistiller
 
 logger = get_logger(__name__)
 
 class ContextBuilder:
     def __init__(self, memory_manager: MemoryManager):
         self.memory_manager = memory_manager
+        self.distiller = ContextDistiller()
         
     def build_context(self, 
                       user_input: str, 
@@ -40,6 +42,15 @@ class ContextBuilder:
         docs = unique_docs[:10]  # Hard cap at 10 memories
         if pre_dedup != len(docs):
             logger.debug(f"[INJECT] Deduplicated: {pre_dedup} → {len(docs)} unique docs")
+            
+        # Distill Context
+        if docs:
+            logger.info("[INJECT] Distilling retrieved memories...")
+            distilled_summary = self.distiller.distill(user_input, docs)
+            if distilled_summary:
+                docs = [distilled_summary]
+            else:
+                docs = [] # Erase docs if completely irrelevant
         
         temperature = 0.6
         effective_system_prompt = system_prompt
