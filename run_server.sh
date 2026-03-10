@@ -3,6 +3,7 @@
 # ENML — Llama.cpp Inference Server Startup
 # ═══════════════════════════════════════════════════════════════════════
 # Starts llama-server with optimized settings for ENML.
+# Use alongside Qdrant and the ENML CLI/Web processes.
 # All configuration is read from .env
 # ═══════════════════════════════════════════════════════════════════════
 
@@ -93,6 +94,7 @@ echo "╚═══════════════════════�
 echo "  Model:     $(basename "$MODEL_PATH")"
 echo "  URL:       http://localhost:$PORT"
 echo "  Context:   ${CONTEXT_SIZE} tokens | Batch: ${BATCH_SIZE}"
+echo "  Metrics:   llama.cpp metrics enabled"
 echo ""
 echo "  ── GPU Resource Allocation ──"
 if [ "$TOTAL_VRAM" != "N/A" ]; then

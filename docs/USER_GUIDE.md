@@ -11,8 +11,9 @@ Complete guide for using the External Neural Memory Layer system — from first-
 3. [Recalling Information](#recalling-information)
 4. [Session Management](#session-management)
 5. [Ingesting External Data](#ingesting-external-data)
-6. [System Management](#system-management)
-7. [Troubleshooting](#troubleshooting)
+6. [Runtime Metrics](#runtime-metrics)
+7. [System Management](#system-management)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -73,7 +74,7 @@ You: _
 
 ## Teaching Facts to Your AI
 
-ENML learns automatically from natural conversation. Simply tell it things:
+ENML learns automatically from natural conversation. Simply tell it things.
 
 ### Identity Information
 ```
@@ -103,6 +104,18 @@ You: my father's name is John
 You: my best friend is Alex
 You: I have a dog named Bruno
 ```
+
+### Conversation Preferences
+
+ENML also learns some conversation preferences and response style hints:
+
+```text
+You: stop asking how can you assist me every time
+You: just talk to me normally
+You: stop asking unnecessary follow-up questions
+```
+
+These do not act like perfect hard rules, but they do influence future prompt grounding.
 
 ### Force-Saving Facts
 If you want to explicitly save something without relying on automatic extraction:
@@ -135,12 +148,13 @@ You: what are my hobbies?
 AI: You enjoy vibe coding and creating art.
 ```
 
-### How It Works (The 5-Step Recall)
-1. **Query Intent Routing**: The system classifies your query to search the right memory silo (`knowledge`, `project`, `research`, etc.).
-2. **Hybrid Search**: The system queries Qdrant using both dense semantic vectors (`BGE-base-en-v1.5`) and sparse keyword matching (`BM25`) to find up to 20 candidate memories.
-3. **Memory Aging**: Older facts with low confidence naturally decay in score over time, while highly confident facts remain resilient.
-4. **Cross-Encoder Reranking**: The retrieved memories are strictly re-scored alongside your query using `BAAI/bge-reranker-base` to surface the absolute most relevant points.
-5. **Context Distillation**: If multiple fragmented memories are found, they are routed to the `ContextDistiller` to be compressed into a dense bullet-point summary before being injected into the final prompt.
+### How It Works (Current Recall Path)
+1. **Retrieval Policy Resolution**: ENML decides whether the query is personal memory, project, document, research, general chat, or ordinary conversation.
+2. **Hybrid Retrieval**: Qdrant is queried with dense and sparse search where relevant.
+3. **Feedback-Aware Scoring**: retrieval quality and usage history influence ranking.
+4. **Evidence Packet Construction**: recalled items are grouped into identity, facts, episodic context, semantic claims, and documents.
+5. **Prompt Grounding**: the answer policy and evidence packet are injected into the system prompt.
+6. **Citation Tracking**: the final response is checked against retrieved evidence for observability.
 
 If no relevant fact exists that passes the confidence thresholds, the AI will say "I don't know" instead of hallucinating.
 
@@ -214,6 +228,25 @@ ingestor.ingest_url("https://example.com/article", topic="AI safety")
 
 ---
 
+## Runtime Metrics
+
+You can inspect runtime behavior directly:
+
+```bash
+python3 chat.py --eval-runtime
+python3 chat.py --eval-citations
+python3 tools/eval_lifecycle.py --json
+python3 tools/retrieval_benchmark.py --iterations 1000
+```
+
+Meaning of key metrics:
+
+- `retrieval_hit_rate`: how often ENML found at least one evidence item
+- `citation_precision`: how tightly the response matched logged evidence
+- `strict_grounded_response_rate`: how often the system used strict grounding mode
+- `mean_total_ms`: mean end-to-end request time
+- `p95_total_ms`: tail latency
+
 ## System Management
 
 ### Running Diagnostics
@@ -232,6 +265,12 @@ tail -f logs/memory_system.log
 
 # Structured JSON audit trail
 tail -f logs/audit.jsonl
+
+# Runtime replay traces
+tail -f logs/runtime_replay.jsonl
+
+# Citation traces
+tail -f logs/citations.jsonl
 ```
 
 ### Full System Reset
@@ -279,7 +318,7 @@ for res in results:
 
 ### AI hallucinating its own identity
 **Cause:** Authority memory not properly loaded.
-**Fix:** Check `memory/authority/identity.json` and verify `AI_NAME` in `.env`.
+**Fix:** Check `memory/authority/profile.json` and verify `AI_NAME` in `.env`.
 
 ### Out of memory / slow responses
 **Causes:**

@@ -1,384 +1,235 @@
 <p align="center">
-  <h1 align="center">🧠 ENML — External Neural Memory Layer</h1>
+  <h1 align="center">ENML — External Neural Memory Layer</h1>
   <p align="center">
-    <em>Infinite memory for local AI systems. Your AI remembers everything, forever.</em>
+    <em>A local cognitive memory layer for local LLM assistants.</em>
   </p>
   <p align="center">
-    <a href="#-quick-start">Quick Start</a> •
-    <a href="#-features">Features</a> •
-    <a href="#-architecture">Architecture</a> •
-    <a href="#-web-ui">Web UI</a> •
-    <a href="#-configuration">Configuration</a> •
+    <a href="#quick-start">Quick Start</a> •
+    <a href="#what-is-included">What Is Included</a> •
+    <a href="#current-architecture">Architecture</a> •
+    <a href="#runtime-evaluation">Runtime Evaluation</a> •
     <a href="docs/USER_GUIDE.md">User Guide</a> •
-    <a href="docs/DEVELOPMENT.md">Dev Guide</a>
+    <a href="docs/ARCHITECTURE.md">Architecture Doc</a> •
+    <a href="docs/DEVELOPMENT.md">Development Guide</a>
   </p>
 </p>
 
 ---
 
-## What is ENML?
+## Quick Start
 
-**ENML** gives your local LLM (Llama 3, Mistral, etc.) persistent, long-term memory that survives across sessions. It builds a personal **Knowledge Graph** from your conversations — your name, hobbies, pets, hardware specs, projects — and recalls them instantly, forever.
+### Requirements
 
-No cloud. No API keys. **100% local.** Your data stays on your machine.
+| Requirement | Notes |
+|---|---|
+| Python 3.10+ | Tested locally on Python 3.12 |
+| Docker | For local Qdrant |
+| llama.cpp | Needs `llama-server` |
+| GGUF model | Example: `Meta-Llama-3-8B-Instruct.Q4_K_M.gguf` |
+| Local disk | For memory store, logs, and Qdrant data |
 
-```
-Session 1:  "My name is Flex, I have a pet lizard named Colu"
-            → Extracted & stored as semantic triples
-
-Session 2:  "What's my pet's name?"
-            → "Your pet lizard's name is Colu."  ✅
-```
-
----
-
-## ⚡ Quick Start
-
-### Prerequisites
-
-| Requirement | Version | Purpose |
-|---|---|---|
-| Python | 3.10+ | Runtime |
-| Docker | 20+ | Qdrant vector database |
-| llama.cpp | Latest | Local LLM inference server |
-| GGUF Model | Any | Recommended: `Meta-Llama-3-8B-Instruct.Q4_K_M.gguf` |
-
-### Installation
+### Setup
 
 ```bash
-# 1. Clone the repository
 git clone https://github.com/flexcreates/ENML.git
 cd ENML
-
-# 2. Run the setup script
 chmod +x setup.sh
 ./setup.sh
+```
 
-# 3. Configure your environment
-nano .env
-# ↳ Set MODEL_PATH, LLAMA_SERVER, and AI_NAME
+### Start Services
 
-# 4. Start the services
-./run_server.sh        # Terminal 1: Start Llama server
-./run_qdrant.sh        # Terminal 2: Start Qdrant (if not started by setup)
+```bash
+./run_qdrant.sh
+./run_server.sh
+./run_web.sh
+```
 
-# 5a. Start chatting (CLI)!
+Or use the CLI:
+
+```bash
 source .venv/bin/activate
 python3 chat.py
-
-# 5b. Or launch the Web UI
-./run_web.sh           # Opens at http://localhost:5000
 ```
 
 ---
 
-## ✨ Features
+## What Is Included
 
-### 🧠 Real-Time Fact Extraction
-Every message is analyzed by the LLM to extract semantic triples:
-- `user has_name Flex` · `user has_pet lizard` · `user has_interest vibe-coding`
-- Multi-value support: hobbies, pets, and projects stack without overwriting
-- **Capped extraction**: max 10 facts per message to prevent memory overload
+ENML now includes:
 
-### 📄 Document Ingestion & Summarization Pipeline
-Paste large documents (README files, documentation, code) and ENML handles them intelligently:
-- **Auto-detection**: inputs over 500 chars or with markdown structure are classified as documents
-- **Section chunking**: documents split by headings/paragraphs for focused processing
-- **LLM-powered categorization & summarization**: each section is summarized by the LLM, and the document is classified into `project`, `research`, or `document` categories.
-- **Categorized dual-layer storage**: summaries stored in categorized collections for domain-specific retrieval + facts extracted into `knowledge_collection`
-- **Confidence-scored retrieval**: retrieved items carry semantic similarity scores; only items above threshold are injected
-- **Noise filtering**: code blocks, ASCII art, URLs, and file paths are stripped before processing
-- **Caps**: max 15 summaries + 25 facts per document to prevent memory explosion
+- layered fact extraction: LLM, rules, regex fallback
+- authority identity and user preference memory
+- rich `MemoryRecord` storage alongside legacy vector payloads
+- policy-driven retrieval
+- model profiles for small vs medium local models
+- evidence-packet grounding for prompt injection
+- semantic-claim fallback for schema-agnostic memory growth
+- episodic memory summaries
+- background consolidation and lifecycle pruning/archive hooks
+- runtime replay logging
+- citation tracking
+- offline evaluation scripts for runtime, citations, and lifecycle
 
-```
-You: [paste a 300-line README.md]
-📄 Large input detected (9378 chars, 281 lines) — ingesting as document...
-✅ Document ingested: 29 sections, 12 summaries, 25 facts extracted
-```
-
-### 🌐 Web UI
-A beautiful dark-themed chat interface at `http://localhost:5000`:
-- Full ENML pipeline — same memory, extraction, and knowledge graph as CLI
-- SSE streaming for real-time response display
-- Document paste support with ingestion feedback
-- Session management across browser tabs
-
-### 🔍 Smart Query Routing & Confidence Retrieval
-The context builder searches Qdrant for relevant memories and injects them into the system prompt — so the AI always has context about you.
-- **Confidence scoring**: every retrieved item carries a semantic similarity score
-- **Threshold filtering**: only items above minimum confidence (0.30) are injected
-- **Hybrid & Fallback retrieval**: queries target specific domains (e.g., project code), falling back to other document collections if needed, alongside knowledge facts
-- **Recency boosting**: recently ingested documents receive a score boost, helping the AI understand context-dependent phrases like "explain this project"
-- **Memory depth**: retrieves up to 10 document summary chunks to reconstruct full context
-- **Memory cap**: max 8 scored items injected per query
-- **Time Awareness**: Agent knows the exact real-world time at the moment of query processing, preventing chronological hallucination.
-- **Deduplication**: redundant memories are filtered before injection
-- **Token budget**: 6000-token context window for rich responses
-
-### 🛡️ Identity Separation & Auto-Aging
-AI identity and user identity are managed through a deterministic `identity.json` file that supersedes vector memory, guaranteeing zero identity drift.
-- `"My name is Flex"` → stored as `user.name = Flex` (Identity Module & Knowledge Graph)
-- `"Your mood is angry"` → stored as `assistant.personality_mood = angry` (Identity Module)
-- **Auto-Aging:** The AI intuitively calculates its exact age globally across instances (`(now - creation_date).days + 1`).
-- **Prompt Routing:** Users can map custom prompt engineering parameters seamlessly in `identity.json`.
-
-### 📊 Knowledge Graph
-Facts are stored as semantic triples with contradiction detection:
-- `user has_name Flex` (active) → `user has_name David` (supersedes old value)
-- Multi-value predicates (hobbies, pets) allow multiple active values
-- **50+ multi-value predicates** including singular and plural forms
-
-### 🧹 Intelligent Filtering
-- **Question pre-check**: questions and commands skip extraction entirely
-- **Document detection**: structured content (markdown, tables, code) bypasses real-time extraction
-- **Noise filter**: greetings, filler, and structural predicates are rejected before storage
-- **Name guard**: device/brand names can't overwrite your identity
-- **Predicate normalization**: `uses Ubuntu` → `uses_os Ubuntu`, `has_hobbies` → `has_hobby`
-
-### 🔒 100% Local & Private
-- All processing happens on your machine
-- No cloud APIs, no telemetry, no data leaves your system
-- Qdrant runs in a local Docker container
-- Embedding model runs on CPU (VRAM reserved for LLM)
+This is no longer just “vector memory plus prompt stuffing”. It is a local memory pipeline with ingestion, consolidation, retrieval policy, grounding, and observability.
 
 ---
 
-## 🏗️ Architecture
+## Current Architecture
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│              chat.py (CLI)  ·  web_server.py (Browser)      │
-│                    ↓ InputClassifier ↓                      │
-│              ┌─────────────┬──────────────────┐             │
-│              │ Conversation │    Document     │             │
-│              │   (normal)   │  (batch ingest) │             │
-│              └──────┬──────┴────────┬─────────┘             │
-├─────────────────────┼───────────────┼───────────────────────┤
-│                   core/orchestrator.py                      │
-│        ┌──────────┬───────────────┬───────────────┐         │
-│        │ Extractor│ MemoryManager │ ContextBuilder│         │
-│        │(LLM-based│ (routes facts │ (builds prompt│         │
-│        │ fact     │  to correct   │  with memory  │         │
-│        │ mining)  │  storage)     │  context)     │         │
-│        └────┬─────┴──────┬────────┴──────┬────────┘         │
-│             │            │               │                  │
-│   ┌─────────┴──┐  ┌──────┴─────┐  ┌──────┴──────┐           │
-│   │ Knowledge  │  │ Authority  │  │   Qdrant    │           │
-│   │   Graph    │  │  Memory    │  │  (Vector    │           │
-│   │(Triples +  │  │ (JSON for  │  │   Search)   │           │
-│   │Enrichment) │  │ AI name/   │  │             │           │
-│   │            │  │ role)      │  │             │           │
-│   └────────────┘  └────────────┘  └─────────────┘           │
-├─────────────────────────────────────────────────────────────┤
-│  Llama.cpp Server (localhost:8080) │ Qdrant (localhost:6333)│
-└─────────────────────────────────────────────────────────────┘
+High-level runtime flow:
+
+```text
+User Input
+  -> Orchestrator
+  -> Memory Extraction / Preference Capture
+  -> MemoryRecord + Qdrant Storage
+  -> Retrieval Policy Resolution
+  -> Evidence Packet Construction
+  -> Prompt Grounding
+  -> llama.cpp Generation
+  -> Citation Tracking
+  -> Runtime Replay Logging
+  -> Background Lifecycle / Episodic Maintenance
 ```
 
-### Core Modules
+Important runtime modules:
 
 | Module | Purpose |
 |---|---|
-| `chat.py` | CLI interface with multi-line paste support and input classification |
-| `web_server.py` | Flask web UI with SSE streaming and full ENML pipeline |
-| `core/orchestrator.py` | Main pipeline: extract → store → build context → stream response |
-| `core/memory/extractor.py` | LLM-based fact extraction with document detection and noise filtering |
-| `core/memory/document_ingester.py` | LLM-summarized document ingestion: chunk → clean → summarize → store |
-| `core/memory_manager.py` | Routes facts to Knowledge Graph, Authority Memory, or Qdrant |
-| `core/knowledge_graph.py` | Semantic triple storage with contradiction detection (50+ multi-value predicates) |
-| `core/memory/authority_memory.py` | Deterministic JSON profile for AI and user identity |
-| `core/context_builder.py` | Builds LLM prompt with confidence-scored memory injection |
-| `core/config.py` | Centralized `.env` loader with configurable limits |
-| `core/vector/retriever.py` | Qdrant semantic search with re-ranking |
-| `core/vector/embeddings.py` | Thread-safe singleton embedding service (CPU-optimized) |
-| `core/vector/qdrant_client.py` | Thread-safe singleton Qdrant connection manager |
+| `core/orchestrator.py` | End-to-end chat pipeline |
+| `core/memory_manager.py` | Ingestion, retrieval, evidence packet assembly |
+| `core/memory/types.py` | `MemoryRecord`, `EvidencePacket`, memory enums |
+| `core/retrieval/policy.py` | Retrieval policy engine |
+| `core/context_builder.py` | Prompt grounding and answer policy injection |
+| `core/citation_tracker.py` | Response-to-evidence tracking |
+| `core/runtime_replay.py` | Runtime replay log writer |
+| `core/memory/lifecycle_service.py` | Archive/prune lifecycle passes |
+| `core/memory/document_ingester.py` | Document classification, summarization, fact extraction |
+
+Collections currently used:
+
+- `knowledge_collection`
+- `project_collection`
+- `research_collection`
+- `document_collection`
+- `episodic_collection`
 
 ---
 
-## 🌐 Web UI
+## Runtime Evaluation
 
-ENML includes a built-in web chat interface powered by Flask:
+ENML now includes built-in runtime evaluation commands.
+
+### CLI Metrics
 
 ```bash
-# Start the web server
-./run_web.sh
-# Open http://localhost:5000 in your browser
+python3 chat.py --eval-runtime
+python3 chat.py --eval-citations
+python3 tools/eval_lifecycle.py --json
+python3 tools/retrieval_benchmark.py --iterations 1000
 ```
 
-**Features:**
-- Dark-themed modern interface with Inter & JetBrains Mono fonts
-- Real-time SSE streaming responses
-- Paste documents directly — auto-detected and batch-processed
-- Same ENML memory pipeline as CLI (extraction, knowledge graph, authority memory)
-- Session management with conversation history
-- Health check endpoint at `/api/health`
+### Web Debug Endpoints
 
-The web UI port is configurable via `WEB_SERVER_PORT` in `.env` (default: `5000`).
+- `/api/debug/retrieve`
+- `/api/debug/runtime-metrics`
+- `/api/debug/citation-metrics`
+- `/api/debug/memories`
+
+### Logged Artifacts
+
+| File | Purpose |
+|---|---|
+| `logs/runtime_replay.jsonl` | End-to-end request traces |
+| `logs/citations.jsonl` | Evidence usage logs |
+| `logs/audit.jsonl` | Structured system audit log |
+| `logs/pipeline.log` | Retrieval and injection pipeline events |
 
 ---
 
-## ⚙️ Configuration
+## Configuration
 
-All configuration is managed through `.env`. No hardcoded values.
-
-### Key Settings
+Core `.env` settings:
 
 ```bash
-# Your AI's name
 AI_NAME=Jarvis
-
-# LLM model and server
-MODEL_PATH=/path/to/Meta-Llama-3-8B-Instruct.Q4_K_M.gguf
-LLAMA_SERVER=/path/to/llama.cpp/build/bin/llama-server
+MODEL_PATH=/path/to/model.gguf
+LLAMA_SERVER=/path/to/llama-server
 LLAMA_SERVER_URL=http://localhost:8080
-
-# Qdrant vector database
 QDRANT_URL=http://localhost:6333
 
-# Embedding model
-EMBED_MODEL=all-MiniLM-L6-v2
-EMBED_DIM=384
+EMBED_MODEL=BAAI/bge-base-en-v1.5
+EMBED_DIM=768
 
-# Context & Extraction Limits (v3.0)
-CONTEXT_SIZE=4096                # LLM context window size
-MAX_REALTIME_INPUT_CHARS=500     # Threshold for document detection
-MAX_FACTS_PER_EXTRACTION=10      # Max facts per single extraction call
-MAX_DOCUMENT_FACTS=25            # Max facts per document ingestion
-MAX_DOCUMENT_SUMMARIES=15        # Max LLM-generated summaries per document
-MIN_RETRIEVAL_CONFIDENCE=0.30    # Minimum confidence score for memory injection
+CONTEXT_SIZE=4096
+PROMPT_BUDGET_SYSTEM=400
+PROMPT_BUDGET_MEMORY=1200
+PROMPT_BUDGET_DOCUMENTS=2000
+PROMPT_BUDGET_USER=200
 
-# Web UI
-WEB_SERVER_PORT=5000             # Web chat UI port
+MIN_RETRIEVAL_CONFIDENCE=0.30
+WEB_SERVER_PORT=5000
 ```
 
-See [`.env.example`](.env.example) for the complete configuration reference.
+Model routing variables:
 
----
-
-## 📁 Project Structure
-
-```
-ENML/
-├── chat.py                 # CLI chat interface (paste-safe, input classification)
-├── web_server.py           # Flask web chat UI with SSE streaming
-├── setup.sh                # One-command installer
-├── run_server.sh           # Llama.cpp server launcher (dynamic GPU-aware VRAM)
-├── run_qdrant.sh           # Qdrant Docker manager
-├── run_web.sh              # Web UI startup script
-├── reset_memory.sh         # Memory wipe utility
-├── requirements.txt        # Python dependencies (includes Flask)
-├── .env.example            # Configuration template
-│
-├── templates/              # Web UI
-│   └── chat.html           # Dark-themed chat interface
-│
-├── core/                   # Core engine
-│   ├── config.py           # .env loader with configurable limits
-│   ├── orchestrator.py     # Main pipeline
-│   ├── memory_manager.py   # Fact routing
-│   ├── context_builder.py  # Prompt builder (capped, deduplicated)
-│   ├── knowledge_graph.py  # Triple store (50+ multi-value predicates)
-│   ├── logger.py           # Logging system
-│   ├── memory/             # Memory subsystem
-│   │   ├── extractor.py    # LLM fact extraction + document detection
-│   │   ├── document_ingester.py  # Batch document ingestion pipeline
-│   │   ├── authority_memory.py   # JSON identity store
-│   │   └── triple_memory.py      # Triple data class
-│   ├── vector/             # Vector subsystem
-│   │   ├── retriever.py    # Qdrant search
-│   │   ├── embeddings.py   # Embedding service (CPU-optimized)
-│   │   └── qdrant_client.py # Connection manager
-│   ├── router/             # Query routing
-│   │   └── query_router.py
-│   └── storage/            # Session storage
-│       └── json_storage.py
-│
-├── research/               # Web research module
-│   └── web_ingestor.py
-├── tools/                  # File operations
-│   └── file_tool.py
-├── docs/                   # Documentation
-│   ├── USER_GUIDE.md
-│   ├── ARCHITECTURE.md
-│   ├── DEVELOPMENT.md
-│   └── WEB_CONNECTIVITY.md
-│
-├── ingest_conversation.py  # Batch conversation import
-├── ingest_project.py       # Project codebase import
-└── ingest_research.py      # Research data import
+```bash
+DEFAULT_CHAT_MODEL=Meta-Llama-3-8B-Instruct
+FAST_CHAT_MODEL=Meta-Llama-3-8B-Instruct
+CODING_CHAT_MODEL=Meta-Llama-3-8B-Instruct
+REASONING_CHAT_MODEL=Meta-Llama-3-8B-Instruct
 ```
 
 ---
 
-## 🧪 Chat Commands
+## Web UI
 
-| Command | Description |
-|---|---|
-| `/remember <text>` | Manually save a fact to memory |
-| `exit` | End the session and save conversation |
-| `Ctrl+C` | Force quit (session still saves) |
+The web UI uses the same backend pipeline as the CLI:
 
-**Paste support**: Multi-line content pasted in the terminal is automatically buffered into a single message. Documents are detected and ingested through the batch pipeline.
+- memory extraction
+- evidence-packet grounding
+- citation/runtime logging
+- document ingestion
+- SSE streaming responses
 
----
+Launch:
 
-## 🔧 Shell Scripts
+```bash
+./run_web.sh
+```
 
-| Script | What it does |
-|---|---|
-| `setup.sh` | Complete installation: venv, deps, .env, dirs, Qdrant |
-| `run_server.sh` | Starts llama-server with dynamic GPU-aware VRAM and configurable context size (default 4096) |
-| `run_qdrant.sh` | Manages Qdrant Docker container lifecycle |
-| `run_web.sh` | Starts the ENML web chat UI (Flask) |
-| `reset_memory.sh` | Wipes all memory, sessions, and vector collections |
+Default URL:
 
----
-
-## 📖 Documentation
-
-| Document | Description |
-|---|---|
-| [User Guide](docs/USER_GUIDE.md) | Step-by-step usage workflows |
-| [Architecture](docs/ARCHITECTURE.md) | System design & data flow diagrams |
-| [Development Guide](docs/DEVELOPMENT.md) | How to extend ENML |
-| [Web Connectivity](docs/WEB_CONNECTIVITY.md) | Internet research integration |
+```text
+http://localhost:5000
+```
 
 ---
 
-## 🛣️ Roadmap
+## Verification
 
-- [x] Real-time fact extraction from conversations
-- [x] Persistent knowledge graph with contradiction detection
-- [x] Multi-value predicate support (hobbies, pets, projects)
-- [x] AI/user identity separation
-- [x] Question/command pre-filtering
-- [x] Predicate normalization (singular/plural, content-based)
-- [x] Document ingestion pipeline (batch processing for large inputs)
-- [x] Web chat UI with full ENML pipeline
-- [x] Multi-line paste handling (terminal & browser)
-- [x] Memory injection limits and deduplication
-- [x] Configurable context window (default 4096 tokens)
-- [x] CPU-optimized embedding model (VRAM reserved for LLM)
-- [x] Document summarization pipeline (LLM-powered section summaries)
-- [x] Confidence-scored retrieval with threshold filtering
-- [x] Hybrid Search (Dense Vectors + BM25 Sparse Keywords)
-- [x] Cross-Encoder Reranking
-- [x] Contextual Memory Distillation (LLM-based compression)
-- [x] Memory decay and confidence aging
-- [x] Episodic Conversation Summarization
-- [ ] Web research ingestion pipeline
-- [ ] Multi-modal memory (images, documents)
-- [ ] Plugin system for custom extractors
+Recommended local checks before release:
+
+```bash
+python3 -m unittest discover -s tests -v
+python3 tools/retrieval_benchmark.py --iterations 100
+python3 chat.py --eval-runtime
+python3 chat.py --eval-citations
+```
+
+If the full stack is running:
+
+```bash
+curl http://localhost:6333/health
+curl http://localhost:8080/health
+curl http://localhost:5000/api/health
+```
 
 ---
 
-## 📄 License
+## Notes
 
-MIT License — see [LICENSE](LICENSE) for details.
-
-**Created by [Flex](https://github.com/flexcreates)** · 2024–2026
-
----
-
-<p align="center">
-  <em>ENML — Because your AI should remember who you are.</em>
-</p>
+- ENML is designed to work fully locally.
+- Internet tooling is documented separately in [docs/WEB_CONNECTIVITY.md](docs/WEB_CONNECTIVITY.md), but it is not required for the current memory stack.
+- Runtime quality now depends more on retrieval policy and grounding discipline than on raw storage volume.

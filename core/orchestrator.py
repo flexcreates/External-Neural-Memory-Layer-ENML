@@ -1,12 +1,17 @@
 
 from typing import List, Dict, Any, Generator
 from datetime import datetime
+import time
 from openai import OpenAI
 import threading
 from .logger import get_logger
-from .config import LLAMA_SERVER_URL, EMBEDDING_MODEL, QDRANT_CONVERSATION_COLLECTION
+from .config import LLAMA_SERVER_URL, EMBEDDING_MODEL, QDRANT_EPISODIC_COLLECTION
+from .citation_tracker import CitationTracker
 from .memory_manager import MemoryManager
 from .context_builder import ContextBuilder
+from .memory.types import MemoryRecord, MemoryType
+from .runtime_replay import RuntimeReplayLogger
+from .router.model_router import ModelRouter
 
 logger = get_logger(__name__)
 
@@ -15,6 +20,9 @@ class Orchestrator:
         self.client = OpenAI(base_url=f"{LLAMA_SERVER_URL}/v1", api_key="sk-proj-no-key")
         self.memory_manager = MemoryManager()
         self.context_builder = ContextBuilder(self.memory_manager)
+        self.model_router = ModelRouter()
+        self.citation_tracker = CitationTracker()
+        self.runtime_replay_logger = RuntimeReplayLogger()
         
     def process_message(self, 
                         user_input: str, 
@@ -37,6 +45,7 @@ class Orchestrator:
                            ingestion was already handled by the caller).
         """
         logger.info(f"Processing message for session {session_id}")
+        request_start = time.perf_counter()
         
         # 1. Knowledge Graph Query (Future)
         # 2. Tool Validation (Future)
@@ -50,25 +59,38 @@ class Orchestrator:
         # Pass recent conversation context so the extractor can resolve pronouns
         # like "its", "that", "this" (e.g., "its David" refers to the pet turtle)
         if not skip_extraction:
+            extraction_start = time.perf_counter()
             self.memory_manager.update_profile(user_input, conversation_history=history)
+            extraction_ms = (time.perf_counter() - extraction_start) * 1000
+        else:
+            extraction_ms = 0.0
 
         # 2. Build Context
         # For this implementation, we assume 'history' contains the conversation SO FAR.
         # We append the NEW user message to the context sent to LLM.
-        
-        full_context, temperature = self.context_builder.build_context(user_input, history, system_prompt=system_prompt)
+        model_name = self.model_router.route(user_input)
+        model_profile = self.model_router.get_profile(model_name)
+        context_start = time.perf_counter()
+        full_context, temperature = self.context_builder.build_context(
+            user_input,
+            history,
+            system_prompt=system_prompt,
+            model_profile=model_profile,
+        )
+        context_ms = (time.perf_counter() - context_start) * 1000
         
         # Append current user message if not already in history
         # (It shouldn't be in history yet if we want to save it strictly after)
         full_context.append({"role": "user", "content": user_input})
         
         # 4. Call LLM
-        logger.info(f"[LLM] Calling model=Meta-Llama-3-8B-Instruct, temp={temperature}, messages={len(full_context)}")
+        logger.info(f"[LLM] Calling model={model_name}, temp={temperature}, messages={len(full_context)}")
         if full_context and full_context[0].get("role") == "system":
             logger.debug(f"[LLM] System prompt preview: {full_context[0]['content'][:400]}...")
         try:
+            llm_start = time.perf_counter()
             stream = self.client.chat.completions.create(
-                model="Meta-Llama-3-8B-Instruct",
+                model=model_name,
                 messages=full_context,
                 stream=True,
                 temperature=temperature,
@@ -82,6 +104,33 @@ class Orchestrator:
                     content = chunk.choices[0].delta.content
                     yield content
                     full_response += content
+
+            evidence_packet = self.context_builder.last_evidence_packet
+            llm_ms = (time.perf_counter() - llm_start) * 1000
+            if evidence_packet is not None:
+                cited = self.citation_tracker.track(session_id, user_input, full_response, evidence_packet)
+                for item in cited:
+                    if item["memory_id"]:
+                        self.memory_manager.feedback.log_retrieval(item["memory_id"], was_used=True)
+                self.runtime_replay_logger.log({
+                    "session_id": session_id,
+                    "query": user_input,
+                    "model_name": model_name,
+                    "model_profile": model_profile.name,
+                    "policy_name": getattr(self.context_builder.last_retrieval_policy, "name", None),
+                    "strict_grounding": getattr(model_profile, "strict_grounding", False) or getattr(getattr(self.context_builder, "last_retrieval_policy", None), "strict_grounding", False),
+                    "evidence_count": len(evidence_packet.all_items()),
+                    "evidence_items": [item.to_dict() for item in evidence_packet.all_items()],
+                    "citations": cited,
+                    "response_preview": full_response[:500],
+                    "timings_ms": {
+                        "extraction": round(extraction_ms, 3),
+                        "context": round(context_ms, 3),
+                        "llm": round(llm_ms, 3),
+                        "total": round((time.perf_counter() - request_start) * 1000, 3),
+                    },
+                    "unsupported_claim_estimate": max(0, self._estimate_unsupported_claims(full_response, cited)),
+                })
                     
             # 5. Post-Processing
             # Check if history is long enough to trigger an episodic summary chunk
@@ -94,10 +143,25 @@ class Orchestrator:
                     args=(history[-20:], session_id),
                     daemon=True
                 ).start()
+            if len(history) > 0 and len(history) % 10 == 0:
+                threading.Thread(
+                    target=self.memory_manager.lifecycle.run_once,
+                    daemon=True
+                ).start()
             
         except Exception as e:
             logger.error(f"LLM Call Failed: {e}")
             yield f"Error: {str(e)}"
+
+    def _estimate_unsupported_claims(self, response_text: str, cited: List[Dict[str, Any]]) -> int:
+        response_tokens = [token for token in response_text.split() if len(token) > 4]
+        cited_text = " ".join(item.get("text", "") for item in cited).lower()
+        unsupported = 0
+        for token in response_tokens:
+            cleaned = token.strip(".,!?;:()[]{}\"'").lower()
+            if cleaned and cleaned not in cited_text:
+                unsupported += 1
+        return min(unsupported, 5)
 
     def _summarize_and_store_episodic(self, recent_history: List[Dict[str, str]], session_id: str):
         """Summarizes a chunk of conversation and stores it as an episodic memory event."""
@@ -119,7 +183,7 @@ class Orchestrator:
         
         try:
             response = self.client.chat.completions.create(
-                model="Meta-Llama-3-8B-Instruct",
+                model=self.model_router.route(prompt),
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.0,
                 max_tokens=200
@@ -134,10 +198,26 @@ class Orchestrator:
             }
             
             self.memory_manager.retriever.add_memory(
-                collection=QDRANT_CONVERSATION_COLLECTION,
+                collection=QDRANT_EPISODIC_COLLECTION,
                 text=summary,
                 payload=payload
             )
+            self.memory_manager._store_memory_record(MemoryRecord(
+                memory_type=MemoryType.EPISODIC.value,
+                subject="conversation",
+                predicate_canonical="summary",
+                predicate_surface="summary",
+                object_value=session_id,
+                claim_text=summary,
+                tags=self.memory_manager._derive_tags(summary),
+                entities=["conversation", session_id],
+                source_type="episodic_summary",
+                source_ref=session_id,
+                confidence=0.75,
+                salience=0.7,
+                namespace="conversation.episodic",
+                metadata={"session_id": session_id},
+            ))
             logger.info("[EPISODIC] Successfully stored conversation summary.")
         except Exception as e:
             logger.error(f"[EPISODIC] Failed to summarize conversation: {e}")

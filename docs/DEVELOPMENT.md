@@ -173,10 +173,16 @@ The extraction prompt in `core/memory/extractor.py` controls what facts the LLM 
 source .venv/bin/activate
 
 # Run all tests
-pytest tests/ -v
+python3 -m unittest discover -s tests -v
 
 # Run diagnostics
 python3 chat.py --diagnose
+
+# Runtime metrics
+python3 chat.py --eval-runtime
+python3 chat.py --eval-citations
+python3 tools/eval_lifecycle.py --json
+python3 tools/retrieval_benchmark.py --iterations 100
 
 # Syntax check all modules
 python3 -m py_compile core/config.py
@@ -207,6 +213,13 @@ retriever.add_memory(
         "timestamp": "2026-02-22T12:00:00"
     }
 )
+```
+
+### Inspecting Runtime Replay Logs
+
+```bash
+tail -f logs/runtime_replay.jsonl
+tail -f logs/citations.jsonl
 ```
 
 ### Querying the Knowledge Graph

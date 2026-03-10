@@ -49,6 +49,12 @@ class Retriever:
         # Format dates properly
         if 'timestamp' not in payload:
             payload['timestamp'] = datetime.utcnow().isoformat() + "Z"
+        if 'created_at' not in payload:
+            payload['created_at'] = payload['timestamp']
+        if 'last_used' not in payload:
+            payload['last_used'] = None
+        if 'source' not in payload:
+            payload['source'] = 'system'
             
         self.qdrant_manager.client.upsert(
             collection_name=collection,
@@ -216,6 +222,14 @@ class Retriever:
                 p = r.get('payload', {})
                 fact_str = p.get('text', f"{p.get('subject','')} {p.get('predicate','')} {p.get('object','')}")
                 logger.debug(f"[RETRIEVE]   [{i+1}] score={r['score']:.3f} → {fact_str[:100]}")
+            try:
+                self.qdrant_manager.client.set_payload(
+                    collection_name=collection,
+                    payload={"last_used": datetime.utcnow().isoformat() + "Z"},
+                    points=[r["id"] for r in final_results],
+                )
+            except Exception as e:
+                logger.debug(f"[RETRIEVE] Failed to update last_used for '{collection}': {e}")
         else:
             logger.warning(f"[RETRIEVE] No results found in '{collection}' for query: '{query[:60]}'")
                 

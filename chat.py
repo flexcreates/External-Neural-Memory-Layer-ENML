@@ -3,16 +3,17 @@ import os
 import sys
 import select
 import argparse
+import json
 from datetime import datetime
 from typing import List, Dict
 
 # Add project root to path if needed, though running from root should work
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from core.orchestrator import Orchestrator
 from core.logger import get_logger
 from core.config import AI_NAME, AI_HINT, MAX_REALTIME_INPUT_CHARS
-from core.memory.document_ingester import DocumentIngester
+from tools.eval_runtime import evaluate as evaluate_runtime_metrics, load_entries as load_runtime_entries
+from tools.eval_citations import load as load_citation_entries
 
 logger = get_logger("ChatInterface")
 
@@ -162,13 +163,32 @@ def main():
     parser = argparse.ArgumentParser(description="Flex AI Chat Interface (ENML Powered)")
     parser.add_argument("--session", type=str, help="Resume specific session ID")
     parser.add_argument("--diagnose", action="store_true", help="Run system component tests")
+    parser.add_argument("--eval-runtime", action="store_true", help="Print runtime replay metrics from logs")
+    parser.add_argument("--eval-citations", action="store_true", help="Print citation metrics from logs")
     args = parser.parse_args()
     
     if args.diagnose:
         run_diagnostics()
+    if args.eval_runtime:
+        print(json.dumps(evaluate_runtime_metrics(load_runtime_entries("logs/runtime_replay.jsonl")), indent=2))
+        sys.exit(0)
+    if args.eval_citations:
+        entries = load_citation_entries("logs/citations.jsonl")
+        total = len(entries)
+        with_citations = sum(1 for entry in entries if entry.get("citations"))
+        citation_count = sum(len(entry.get("citations", [])) for entry in entries)
+        print(json.dumps({
+            "total_responses": total,
+            "responses_with_citations": with_citations,
+            "citation_coverage": round(with_citations / total, 4) if total else 0.0,
+            "average_citations_per_response": round(citation_count / total, 4) if total else 0.0,
+        }, indent=2))
+        sys.exit(0)
 
     print("Initializing ENML Orchestrator...")
     try:
+        from core.orchestrator import Orchestrator
+        from core.memory.document_ingester import DocumentIngester
         orchestrator = Orchestrator()
         classifier = InputClassifier()
         doc_ingester = DocumentIngester(orchestrator.memory_manager, llm_client=orchestrator.client)

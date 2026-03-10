@@ -24,6 +24,8 @@ from core.orchestrator import Orchestrator
 from core.logger import get_logger
 from core.config import AI_NAME, AI_HINT, WEB_SERVER_PORT, MAX_REALTIME_INPUT_CHARS
 from core.memory.document_ingester import DocumentIngester
+from tools.eval_runtime import evaluate as evaluate_runtime_metrics, load_entries as load_runtime_entries
+from tools.eval_citations import load as load_citation_entries
 
 logger = get_logger("WebServer")
 
@@ -313,6 +315,42 @@ def debug_retrieve():
         })
     except Exception as e:
         logger.error(f"Debug retrieve endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/runtime-metrics")
+def debug_runtime_metrics():
+    """Summarize runtime replay metrics from logs/runtime_replay.jsonl."""
+    try:
+        entries = load_runtime_entries("logs/runtime_replay.jsonl")
+        return jsonify(evaluate_runtime_metrics(entries))
+    except Exception as e:
+        logger.error(f"Debug runtime metrics endpoint error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/debug/citation-metrics")
+def debug_citation_metrics():
+    """Summarize citation usage from logs/citations.jsonl."""
+    try:
+        entries = load_citation_entries("logs/citations.jsonl")
+        total = len(entries)
+        with_citations = sum(1 for entry in entries if entry.get("citations"))
+        citation_count = sum(len(entry.get("citations", [])) for entry in entries)
+        by_type = {}
+        for entry in entries:
+            for citation in entry.get("citations", []):
+                key = citation.get("memory_type", "unknown")
+                by_type[key] = by_type.get(key, 0) + 1
+        return jsonify({
+            "total_responses": total,
+            "responses_with_citations": with_citations,
+            "citation_coverage": round(with_citations / total, 4) if total else 0.0,
+            "average_citations_per_response": round(citation_count / total, 4) if total else 0.0,
+            "citations_by_type": by_type,
+        })
+    except Exception as e:
+        logger.error(f"Debug citation metrics endpoint error: {e}")
         return jsonify({"error": str(e)}), 500
 
 

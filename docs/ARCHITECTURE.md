@@ -6,34 +6,39 @@ This document provides a technical deep-dive into the External Neural Memory Lay
 
 ## 1. System Overview
 
-ENML is designed as a modular pipeline that intercepts communications between the user and the LLM. It extracts, organizes, retrieves, and distills memories before they ever reach the text generation phase.
+ENML is designed as a modular local memory pipeline that captures interactions, stores them in multiple memory forms, retrieves by policy, grounds answers with explicit evidence, and logs the runtime for later evaluation.
 
 ```mermaid
 graph TD
     User((User Input)) -->|Message| Orchestrator[Orchestrator]
     
-    subgraph "Phase 1: Extraction & Identity"
+    subgraph "Phase 1: Extraction & Storage"
         Orchestrator --> Extractor[Memory Extractor]
-        Extractor -->|JSON Triples| Linker[Entity Linker]
+        Extractor -->|Facts + Claims| Linker[Entity Linker]
         Linker --> AuthMem[Authority Memory]
+        Linker --> Records[MemoryRecord Store]
         Linker --> VectorDB[(Qdrant Vector DB)]
     end
     
-    subgraph "Phase 2: Intelligent Retrieval"
+    subgraph "Phase 2: Retrieval Policy"
         Orchestrator --> Router[Query Router]
-        Router -->|Intent Topic| Retriever[Hybrid Retriever]
+        Router -->|Intent + Policy| Policy[Retrieval Policy Engine]
+        Policy --> Retriever[Hybrid Retriever]
         Retriever -->|Dense + Sparse| VectorDB
         Retriever -->|Raw Matches| Reranker[CrossEncoder Reranker]
     end
     
-    subgraph "Phase 3: Distillation & Injection"
-        Reranker -->|Top N Memories| Distiller[Context Distiller]
-        Distiller -->|Compressed Summary| ContextBuilder[Context Builder]
+    subgraph "Phase 3: Grounding & Logging"
+        Reranker -->|Evidence Items| Packet[Evidence Packet]
+        Packet --> Distiller[Context Distiller]
+        Distiller -->|Compressed Summary + Evidence| ContextBuilder[Context Builder]
         AuthMem -->|Permanent Profile| ContextBuilder
+        ContextBuilder --> Replay[Runtime Replay Log]
     end
     
     subgraph "Phase 4: Generation"
         ContextBuilder -->|Final Prompt| LLM[Llama.cpp Server]
+        LLM --> Cite[Citation Tracker]
         LLM -->|Stream| User
     end
 ```
@@ -44,13 +49,16 @@ graph TD
 
 | Component | Responsibility |
 |---|---|
-| **Memory Extractor** | Uses an LLM to read user input and extract structured JSON facts (Subject-Predicate-Object). Performs validation to reject garbled data. |
+| **Memory Extractor** | Uses layered extraction (LLM, rules, regex fallback) to produce facts robustly. |
 | **Authority Memory** | Deterministic JSON storage for the AI's identity and the User's core identity to prevent data drift or hallucination. |
-| **Hybrid Retriever** | Polls Qdrant using both Dense Vectors (semantic meaning) and BM25 Sparse Vectors (keyword matching). Applies Memory Aging to penalize very old, low-confidence facts. |
+| **MemoryRecord Store** | Rich local store for facts, semantic claims, episodic summaries, and lifecycle metadata. |
+| **Hybrid Retriever** | Polls Qdrant using dense and sparse retrieval, then uses reranking and feedback-aware scoring. |
 | **CrossEncoder Reranker** | Takes the broad results from the Retriever and strictly scores them based on relevance to the exact query, elevating the most critical memories. |
-| **Query Router** | Fast intent classification. Determines if the user is asking a personal question, researching a document, or discussing project code, routing the retrieval to the correct silo. |
-| **Context Distiller** | Compresses noisy, fragmented retrieved memories into a dense, concise summary block to save context window space and prevent LLM confusion. |
-| **Orchestrator** | The central engine that ties everything together and handles Episodic Conversation Summaries (chunking long conversation histories). |
+| **Query Router** | Intent classification for personal memory, documents, projects, research, and conversation/general tasks. |
+| **Retrieval Policy Engine** | Chooses retrieval depth, memory classes, and answer policy based on the query and model profile. |
+| **Context Distiller** | Compresses relevant evidence when beneficial for the active model profile. |
+| **Citation Tracker / Runtime Replay** | Logs what was retrieved, what was cited, and how long each stage took. |
+| **Orchestrator** | The central engine that ties everything together and triggers episodic/lifecycle background work. |
 
 ---
 
@@ -72,7 +80,7 @@ The `Orchestrator` receives the message and sends it to the `MemoryExtractor`. A
 
 #### Step 2: Routing & Storage
 The `MemoryManager` routes these facts:
-* `"has_name Flex"` hits the `AuthorityMemory` limit guard. It is saved directly to `identity.json` for permanent absolute priority.
+* `"has_name Flex"` is stored in `authority/profile.json` for permanent absolute priority.
 * The pet and project facts are sent to the `EntityLinker`. Vectors are generated using the local `BGE-base-en` embedding model.
 * The `Retriever` inserts these as points into `Qdrant` along with Sparse BM25 keywords and timestamp metadata.
 
@@ -105,10 +113,8 @@ The 15 retrieved facts are paired with the user's query and passed through the `
 * The reranker gives a massive relevance score to the fact `{"subject": "lizard", "predicate": "has_name", "object": "Colu"}`.
 * Irrelevant retrieved facts are discarded. The top 5 facts remain.
 
-#### Step 5: Context Distillation
-Instead of pasting 5 separate raw JSON facts into the LLM prompt, ENML sends the top 5 facts to the `ContextDistiller`.
-The Distiller compresses them into a dense string:
-> *User's pet lizard is named Colu. User codes in Python.*
+#### Step 5: Evidence Packet + Distillation
+Instead of flattening everything into raw triples, ENML assembles an evidence packet with identity, facts, episodic context, and metadata. Distillation may compress this further for the active model profile.
 
 #### Step 6: Prompt Construction
 The `ContextBuilder` constructs the final invisible system prompt:
@@ -121,8 +127,10 @@ Name: Jarvis
 User's identity:
 Name: Flex
 
-Relevant Graph Memory & Context:
-User's pet lizard is named Colu. User codes in Python.
+<retrieved_facts>
+[id=...] User's pet lizard is named Colu.
+[id=...] User codes in Python.
+</retrieved_facts>
 ```
 
 #### Step 7: Final Generation
@@ -141,4 +149,4 @@ Because ENML relies on multiple localized AI models, it utilizes a Dynamic VRAM 
 1. **Strict Buffer:** A rigid 300 MB margin is enforced using `llama-server`'s native `--fit-target` argument to guarantee OS UI stability, rather than relying on bash arithmetic.
 2. **Native Layer Optimization:** Because the buffer is native, the `FINAL_NGL` (GPU Layers) integer is defaulted to a massive threshold (999). This forces the C++ engine to automatically optimize exactly how many layers it can safely cram into whatever your *current* Free VRAM is.
 3. **Offline/Online Adaptation:** By using native fitting on launch, the server seamlessly adapts to whether your other heavy systems (like Background Automation) are currently online or offline, without hardcoded static reservations.
-4. **CPU Models:** The Embedding (`bge-base-en`) and Reranker models are executed entirely on the CPU via `sentence-transformers` to maximize open VRAM availability for the heavy conversational LLM.
+4. **CPU Models:** The embedding and reranker models run on CPU via `sentence-transformers`, reserving VRAM for the main conversational model.

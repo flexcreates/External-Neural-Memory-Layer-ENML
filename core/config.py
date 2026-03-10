@@ -1,7 +1,12 @@
 
 import os
 from pathlib import Path
-from dotenv import load_dotenv
+
+try:
+    from dotenv import load_dotenv
+except ImportError:  # pragma: no cover - optional dependency in minimal environments
+    def load_dotenv():
+        return False
 
 # Load environment variables
 load_dotenv()
@@ -34,6 +39,7 @@ QDRANT_CONVERSATION_COLLECTION = os.getenv("QDRANT_CONVERSATION_COLLECTION", "co
 QDRANT_PROFILE_COLLECTION = os.getenv("QDRANT_PROFILE_COLLECTION", "profile_collection")
 QDRANT_KNOWLEDGE_COLLECTION = os.getenv("QDRANT_KNOWLEDGE_COLLECTION", "knowledge_collection")
 QDRANT_DOCUMENT_COLLECTION = os.getenv("QDRANT_DOCUMENT_COLLECTION", "document_collection")
+QDRANT_EPISODIC_COLLECTION = os.getenv("QDRANT_EPISODIC_COLLECTION", "episodic_collection")
 
 # Model configuration
 EMBEDDING_MODEL = os.getenv("EMBED_MODEL", "BAAI/bge-base-en-v1.5")
@@ -49,6 +55,16 @@ MAX_DOCUMENT_FACTS = int(os.getenv("MAX_DOCUMENT_FACTS", 25))
 MAX_DOCUMENT_SUMMARIES = int(os.getenv("MAX_DOCUMENT_SUMMARIES", 15))
 MIN_RETRIEVAL_CONFIDENCE = float(os.getenv("MIN_RETRIEVAL_CONFIDENCE", 0.30))
 CONTEXT_SIZE = int(os.getenv("CONTEXT_SIZE", 4096))
+PROMPT_BUDGET_SYSTEM = int(os.getenv("PROMPT_BUDGET_SYSTEM", 400))
+PROMPT_BUDGET_MEMORY = int(os.getenv("PROMPT_BUDGET_MEMORY", 1200))
+PROMPT_BUDGET_DOCUMENTS = int(os.getenv("PROMPT_BUDGET_DOCUMENTS", 2000))
+PROMPT_BUDGET_USER = int(os.getenv("PROMPT_BUDGET_USER", 200))
+
+# Model routing
+DEFAULT_CHAT_MODEL = os.getenv("DEFAULT_CHAT_MODEL", "Meta-Llama-3-8B-Instruct")
+FAST_CHAT_MODEL = os.getenv("FAST_CHAT_MODEL", DEFAULT_CHAT_MODEL)
+CODING_CHAT_MODEL = os.getenv("CODING_CHAT_MODEL", DEFAULT_CHAT_MODEL)
+REASONING_CHAT_MODEL = os.getenv("REASONING_CHAT_MODEL", DEFAULT_CHAT_MODEL)
 
 # Web Server
 WEB_SERVER_PORT = int(os.getenv("WEB_SERVER_PORT", 5000))

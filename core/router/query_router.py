@@ -1,71 +1,85 @@
-from typing import Dict, Any
 from core.config import (
-    QDRANT_RESEARCH_COLLECTION,
-    QDRANT_PROJECT_COLLECTION,
-    QDRANT_CONVERSATION_COLLECTION,
-    QDRANT_KNOWLEDGE_COLLECTION,
+    LLAMA_SERVER_URL,
     QDRANT_DOCUMENT_COLLECTION,
-    LLAMA_SERVER_URL
+    QDRANT_KNOWLEDGE_COLLECTION,
+    QDRANT_PROJECT_COLLECTION,
+    QDRANT_RESEARCH_COLLECTION,
 )
 from core.logger import get_logger
 from openai import OpenAI
 
 logger = get_logger(__name__)
 
+
 class QueryRouter:
-    """Routes queries to correct Qdrant collection based on LLM intent classification."""
+    """Routes queries to the narrowest reasonable collection."""
+
     def __init__(self):
         self.client = OpenAI(base_url=f"{LLAMA_SERVER_URL}/v1", api_key="sk-proj-no-key")
 
     def route(self, query: str) -> str:
-        """
-        Classify the query into one of 5 intents and return the corresponding collection.
-        If classification fails, fallback to heuristics.
-        """
-        system_prompt = (
-            "You are a sophisticated query intent classifier. Classify the user's query into EXACTLY ONE of the following tags:\n"
-            "- 'personal_question': The user is asking about themselves, their identity, specs, hobbies, or the AI's identity.\n"
-            "- 'project_question': The user is asking about a codebase, scripts, programming, architecture, or system.\n"
-            "- 'document_question': The user is asking about specific documents, notes, readmes, or text files.\n"
-            "- 'research_question': The user is asking about general concepts, academic topics, frameworks, or web knowledge.\n"
-            "- 'general_knowledge': The user is asking a basic conversation question or something not related to personal memory, projects, or documents.\n\n"
-            "Respond ONLY with the exact string tag and nothing else."
-        )
-        
+        heuristic = self._heuristic_route(query)
+        if heuristic:
+            logger.info(f"[ROUTE] Heuristic intent route → {heuristic}")
+            return heuristic
+
         try:
             response = self.client.chat.completions.create(
                 model="Meta-Llama-3-8B-Instruct",
                 messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": f"Query:\n{query}"}
+                    {
+                        "role": "system",
+                        "content": (
+                            "Classify the query into exactly one tag: "
+                            "personal_query, project_query, document_query, research_query. "
+                            "Pure arithmetic, counting, continuation requests, and casual non-project tasks should default to personal_query fallback. "
+                            "Reply with only the tag."
+                        ),
+                    },
+                    {"role": "user", "content": query},
                 ],
                 temperature=0.0,
-                max_tokens=15
+                max_tokens=10,
             )
             intent = response.choices[0].message.content.strip().lower()
-            logger.info(f"[ROUTE] LLM classified intent: {intent}")
-            
-            if "personal_question" in intent:
-                return QDRANT_KNOWLEDGE_COLLECTION
-            elif "project_question" in intent:
-                return QDRANT_PROJECT_COLLECTION
-            elif "document_question" in intent:
-                return QDRANT_DOCUMENT_COLLECTION
-            elif "research_question" in intent:
-                return QDRANT_RESEARCH_COLLECTION
-            elif "general_knowledge" in intent:
-                return QDRANT_KNOWLEDGE_COLLECTION # fallback
-                
-        except Exception as e:
-            logger.warning(f"[ROUTE] LLM classification failed: {e}. Falling back to default.")
-
-        query_lower = query.lower()
-        project_keywords = ["code", "script", "project", "app"]
-        if any(kw in query_lower for kw in project_keywords):
-            return QDRANT_PROJECT_COLLECTION
-            
-        research_keywords = ["explain", "what is a", "how does"]
-        if any(kw in query_lower for kw in research_keywords):
-            return QDRANT_RESEARCH_COLLECTION
+            mapped = {
+                "personal_query": QDRANT_KNOWLEDGE_COLLECTION,
+                "project_query": QDRANT_PROJECT_COLLECTION,
+                "document_query": QDRANT_DOCUMENT_COLLECTION,
+                "research_query": QDRANT_RESEARCH_COLLECTION,
+            }.get(intent)
+            if mapped:
+                logger.info(f"[ROUTE] LLM intent route → {intent} => {mapped}")
+                return mapped
+        except Exception as exc:
+            logger.warning(f"[ROUTE] LLM classification failed: {exc}")
 
         return QDRANT_KNOWLEDGE_COLLECTION
+
+    def _heuristic_route(self, query: str):
+        text = query.lower().strip()
+
+        general_task_patterns = [
+            "count to", "multiply", "reverse", "continue rest", "continue the rest",
+            "sum ", "subtract", "divide", "calculate", "math", "till 0",
+        ]
+        if any(pattern in text for pattern in general_task_patterns):
+            return QDRANT_KNOWLEDGE_COLLECTION
+
+        personal_markers = [
+            "my ", "me ", "i ", "i'm", "i am", "who am i", "what is my", "remember",
+            "do you know my", "about me",
+        ]
+        if any(marker in f" {text} " for marker in personal_markers):
+            return QDRANT_KNOWLEDGE_COLLECTION
+
+        if any(token in text for token in ["readme", "document", "docs", "file", "markdown", "notes", "pdf"]):
+            return QDRANT_DOCUMENT_COLLECTION
+
+        if any(token in text for token in ["project", "code", "repo", "repository", "function", "class", "module", "script", "architecture"]):
+            return QDRANT_PROJECT_COLLECTION
+
+        if any(token in text for token in ["research", "explain", "what is", "how does", "compare", "framework"]):
+            return QDRANT_RESEARCH_COLLECTION
+
+        return None
