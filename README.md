@@ -137,6 +137,9 @@ MODELS_DIR=/home/user/ai-models
 LLAMA_SERVER=/home/user/Tools/llama.cpp/build/bin/llama-server
 LLAMA_SERVER_URL=http://localhost:8080
 CONTEXT_SIZE=4096
+FIT_CONTEXT_MIN=1024
+FIT_CONTEXT_STEP=256
+FIT_TARGET_MB=512
 CACHE_TYPE_K=q8_0
 CACHE_TYPE_V=q8_0
 

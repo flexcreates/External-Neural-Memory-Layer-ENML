@@ -157,16 +157,17 @@ def _build_llama3_prompt(messages: List[Message]) -> str:
 def _build_mistral_prompt(messages: List[Message]) -> str:
     """
     Mistral Instruct format.
-    Merge the cleaned system prompt into the first user turn and emit canonical
-    `<s>[INST] ... [/INST] assistant </s>` turn boundaries so llama.cpp serves
-    Mistral-family models with the structure they expect.
+    Merge the cleaned system prompt into the first user turn and emit the
+    tokenizer-native `[INST] ... [/INST] assistant </s>` boundaries.
+    Do not prepend `<s>` manually because many GGUF Mistral builds already
+    auto-insert BOS at tokenization time.
     """
     system_prompt, exchanges = _split_system_and_turns(messages)
 
     if not exchanges:
         clean = _strip_xml_from_system(system_prompt)
         content = clean.strip() if clean else ""
-        return f"<s>[INST] {content} [/INST]" if content else "<s>[INST] [/INST]"
+        return f"[INST] {content} [/INST]" if content else "[INST] [/INST]"
 
     clean_system = _strip_xml_from_system(system_prompt)
     prompt_parts: List[str] = []
@@ -179,7 +180,7 @@ def _build_mistral_prompt(messages: List[Message]) -> str:
             if first_user and clean_system:
                 content = f"{clean_system}\n\n{content.strip()}"
             normalized = content.strip()
-            prompt_parts.append(f"<s>[INST] {normalized} [/INST]")
+            prompt_parts.append(f"[INST] {normalized} [/INST]")
             first_user = False
         elif role == "assistant":
             prompt_parts.append(f" {content.strip()} </s>")

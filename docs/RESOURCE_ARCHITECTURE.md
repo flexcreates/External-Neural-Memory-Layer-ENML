@@ -16,24 +16,29 @@ This document describes the practical resource model for ENML on typical local h
 
 ## Current Server Strategy
 
-`run_server.sh` starts `llama-server` with:
+`run_server.sh` plans a launch profile with `llama-fit-params`, then starts
+`llama-server` with:
 
-- `--fit on`
-- `--fit-target 300`
+- live free VRAM from `nvidia-smi`
+- the selected GGUF model's own `context_length`
+- `FIT_TARGET_MB=512` by default
+- `FIT_CONTEXT_MIN=1024` and `FIT_CONTEXT_STEP=256` by default
+- explicit `-c <planned_context>`
+- explicit `--gpu-layers <planned_layers>`
 - `--flash-attn on`
 - `--parallel 1`
 - `--cache-ram 2048`
-- dynamic `-c` derived from current free VRAM, estimated model footprint, runtime overhead, and KV cache settings
 - `-b 512`
 
 That means:
 
-- layer offload is automatic
-- a 300 MB free-memory target is preserved
+- context is computed from current GPU headroom at launch time
+- layer offload is computed from the same launch-time GPU headroom
+- a configurable free-memory target is preserved per GPU device
 - prompt cache is enabled
-- `CONTEXT_SIZE` is a fallback/default when live GPU telemetry is unavailable
-- the effective context can scale down or up as GPU headroom changes
-- KV cache pressure is budgeted from live VRAM, estimated model size, and runtime overhead instead of fixed per-family caps
+- there is no model-family-specific context cap in `run_server.sh`
+- if more VRAM is free later, the next launch can choose a larger context
+- if VRAM is tighter later, the next launch can choose a smaller context
 
 ## Why Some Models Feel Slow
 

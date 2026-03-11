@@ -150,7 +150,8 @@ class PromptPipelineModelsTest(unittest.TestCase):
 
     def test_mistral_prompt_does_not_start_with_manual_bos(self):
         prompt = build_chat_prompt("Mistral-7B-Instruct.gguf", SYSTEM_WITH_MEMORY, "explain recursion")
-        self.assertTrue(prompt.startswith("<s>[INST]"))
+        self.assertTrue(prompt.startswith("[INST]"))
+        self.assertFalse(prompt.startswith("<s>[INST]"))
         self.assertIn("[/INST]", prompt)
 
     def test_mistral_prompt_keeps_memory_context_in_first_inst_block(self):
@@ -161,7 +162,7 @@ class PromptPipelineModelsTest(unittest.TestCase):
         )
         self.assertIn("The user likes Python", prompt)
         self.assertIn("favorite number 2545", prompt)
-        self.assertIn("<s>[INST]", prompt)
+        self.assertIn("[INST]", prompt)
 
     def test_wizardcoder_preserves_internal_helper_instructions(self):
         prompt = build_chat_prompt_from_messages(
