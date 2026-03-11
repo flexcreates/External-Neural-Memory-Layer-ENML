@@ -137,6 +137,8 @@ MODELS_DIR=/home/user/ai-models
 LLAMA_SERVER=/home/user/Tools/llama.cpp/build/bin/llama-server
 LLAMA_SERVER_URL=http://localhost:8080
 CONTEXT_SIZE=4096
+CACHE_TYPE_K=q8_0
+CACHE_TYPE_V=q8_0
 
 QDRANT_URL=http://localhost:6333
 QDRANT_API_KEY=

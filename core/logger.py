@@ -58,6 +58,7 @@ class _LoggerConfigurator:
 
         root_logger = logging.getLogger("MemorySystem")
         root_logger.setLevel(logging.DEBUG)
+        root_logger.propagate = False
 
         # Prevent duplicate handlers on reload
         if root_logger.handlers:

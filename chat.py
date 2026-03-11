@@ -193,6 +193,8 @@ def main():
         classifier = InputClassifier()
         doc_ingester = DocumentIngester(orchestrator.memory_manager, llm_client=orchestrator.client)
         logger.info("Orchestrator initialized successfully.")
+        if not getattr(orchestrator.memory_manager.retriever.qdrant_manager, "available", True):
+            print("Warning: Qdrant is not reachable. ENML will run without vector memory until you start Qdrant with ./run_qdrant.sh.")
     except Exception as e:
         logger.error(f"Failed to initialize Orchestrator: {e}")
         sys.exit(1)

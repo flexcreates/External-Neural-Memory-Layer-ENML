@@ -32,6 +32,13 @@ class Retriever:
 
     def add_memory(self, collection: str, text: str, payload: Dict[str, Any], memory_id: Optional[str] = None):
         """Adds text context and its metadata to the specified collection."""
+        if not getattr(self.qdrant_manager, "available", True):
+            logger.warning(
+                f"Skipping add_memory for '{collection}' because Qdrant is unavailable. "
+                "The fact is not persisted to vector memory in this run."
+            )
+            return
+
         if memory_id is None:
             memory_id = str(uuid.uuid4())
             
@@ -56,18 +63,21 @@ class Retriever:
         if 'source' not in payload:
             payload['source'] = 'system'
             
-        self.qdrant_manager.client.upsert(
-            collection_name=collection,
-            wait=True,
-            points=[
-                models.PointStruct(
-                    id=memory_id,
-                    vector=vector_dict,
-                    payload=payload
-                )
-            ]
-        )
-        logger.info(f"Added memory to {collection} with ID {memory_id}")
+        try:
+            self.qdrant_manager.client.upsert(
+                collection_name=collection,
+                wait=True,
+                points=[
+                    models.PointStruct(
+                        id=memory_id,
+                        vector=vector_dict,
+                        payload=payload
+                    )
+                ]
+            )
+            logger.info(f"Added memory to {collection} with ID {memory_id}")
+        except Exception as e:
+            logger.error(f"Failed to add memory to '{collection}': {e}")
 
     def search(self, collection: str, query: str, limit: int = 5, 
                filter_conditions: Optional[list] = None,
@@ -82,6 +92,11 @@ class Retriever:
             filter_dict: Simple key-value dict converted to exact-match filters.
         """
         logger.info(f"[RETRIEVE] Searching '{collection}' for: '{query[:80]}' (limit={limit})")
+        if not getattr(self.qdrant_manager, "available", True):
+            logger.warning(
+                f"[RETRIEVE] Qdrant unavailable, returning no vector results for '{collection}'."
+            )
+            return []
         query_vector = self.embedding_service.embed(query)
         logger.debug(f"[RETRIEVE] Embedding generated: {len(query_vector)}-dim vector")
         

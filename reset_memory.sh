@@ -38,6 +38,42 @@ run_docker() {
     return 1
 }
 
+run_sudo() {
+    if command -v sudo >/dev/null 2>&1; then
+        sudo "$@"
+        return
+    fi
+    return 1
+}
+
+clear_dir_with_fallback() {
+    local dir="$1"
+    local label="$2"
+    local use_docker_fallback="${3:-0}"
+
+    if [ ! -d "$dir" ]; then
+        return 0
+    fi
+
+    if find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null; then
+        echo -e "  ${GREEN}${label}${NC}"
+        return 0
+    fi
+
+    if run_sudo find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} + 2>/dev/null; then
+        echo -e "  ${GREEN}${label}${NC} ${YELLOW}(used sudo)${NC}"
+        return 0
+    fi
+
+    if [ "$use_docker_fallback" = "1" ] && run_docker run --rm -v "$dir:/target" alpine sh -c 'rm -rf /target/* /target/.[!.]* /target/..?*' >/dev/null 2>&1; then
+        echo -e "  ${GREEN}${label}${NC} ${YELLOW}(used Docker cleanup)${NC}"
+        return 0
+    fi
+
+    echo -e "  ${RED}Failed to clear ${dir}${NC}"
+    return 1
+}
+
 MEMORY_ROOT="${MEMORY_ROOT:-$(read_env_value MEMORY_ROOT || printf '%s' "$SCRIPT_DIR/memory")}"
 AI_NAME="${AI_NAME:-$(read_env_value AI_NAME || printf 'ENML Assistant')}"
 
@@ -74,21 +110,12 @@ fi
 echo ""
 echo -e "${BOLD}Clearing ENML state...${NC}"
 
-clear_dir() {
-    local dir="$1"
-    local label="$2"
-    if [ -d "$dir" ]; then
-        find "$dir" -mindepth 1 -maxdepth 1 -exec rm -rf {} +
-        echo -e "  ${GREEN}${label}${NC}"
-    fi
-}
-
-clear_dir "${MEMORY_ROOT}/conversations" "Cleared conversations"
-clear_dir "${MEMORY_ROOT}/projects" "Cleared projects"
-clear_dir "${MEMORY_ROOT}/research" "Cleared research data"
-clear_dir "${MEMORY_ROOT}/graph" "Cleared graph data"
-clear_dir "${MEMORY_ROOT}/records" "Cleared memory records"
-clear_dir "$SCRIPT_DIR/logs" "Cleared logs"
+clear_dir_with_fallback "${MEMORY_ROOT}/conversations" "Cleared conversations"
+clear_dir_with_fallback "${MEMORY_ROOT}/projects" "Cleared projects"
+clear_dir_with_fallback "${MEMORY_ROOT}/research" "Cleared research data"
+clear_dir_with_fallback "${MEMORY_ROOT}/graph" "Cleared graph data"
+clear_dir_with_fallback "${MEMORY_ROOT}/records" "Cleared memory records"
+clear_dir_with_fallback "$SCRIPT_DIR/logs" "Cleared logs"
 
 AUTHORITY_DIR="${MEMORY_ROOT}/authority"
 PROFILE_FILE="${AUTHORITY_DIR}/profile.json"
@@ -106,7 +133,7 @@ else
     echo -e "  ${YELLOW}Qdrant container not present${NC}"
 fi
 
-clear_dir "$SCRIPT_DIR/qdrant_storage" "Deleted local Qdrant storage"
+clear_dir_with_fallback "$SCRIPT_DIR/qdrant_storage" "Deleted local Qdrant storage" 1
 
 find "$SCRIPT_DIR" -not -path "*/.venv/*" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 find "$SCRIPT_DIR" -not -path "*/.venv/*" -type f \( -name "*.pyc" -o -name "*.pyo" \) -delete 2>/dev/null || true

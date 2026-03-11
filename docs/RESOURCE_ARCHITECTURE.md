@@ -23,7 +23,7 @@ This document describes the practical resource model for ENML on typical local h
 - `--flash-attn on`
 - `--parallel 1`
 - `--cache-ram 2048`
-- `-c 4096`
+- dynamic `-c` derived from current free VRAM, estimated model footprint, runtime overhead, and KV cache settings
 - `-b 512`
 
 That means:
@@ -31,7 +31,9 @@ That means:
 - layer offload is automatic
 - a 300 MB free-memory target is preserved
 - prompt cache is enabled
-- context size is capped at 4096 unless you change `.env`
+- `CONTEXT_SIZE` is a fallback/default when live GPU telemetry is unavailable
+- the effective context can scale down or up as GPU headroom changes
+- KV cache pressure is budgeted from live VRAM, estimated model size, and runtime overhead instead of fixed per-family caps
 
 ## Why Some Models Feel Slow
 

@@ -3,7 +3,7 @@ from openai import OpenAI
 from core.config import LLAMA_SERVER_URL
 from core.logger import get_logger
 from core.llm_runtime import detect_server_model
-from core.prompt_templates import build_chat_prompt_from_messages
+from core.prompt_templates import build_chat_prompt_from_messages, get_stop_sequences_for_model
 
 logger = get_logger(__name__)
 
@@ -42,7 +42,8 @@ class ContextDistiller:
                 model=self.model_name,
                 prompt=prompt,
                 temperature=0.0,
-                max_tokens=400
+                max_tokens=400,
+                stop=get_stop_sequences_for_model(self.model_name),
             )
             
             distilled = response.choices[0].text.strip()

@@ -39,7 +39,10 @@ def get_model_template_info(model_name: str) -> TemplateInfo:
         family = "mistral"
     elif "qwen" in normalized:
         template = "qwen"
-        family = "qwen"
+        if "coder" in normalized:
+            family = "qwen-coder"
+        else:
+            family = "qwen"
     elif "deepseek-coder" in normalized:
         template = "deepseek_chatml"
         family = "deepseek-coder"
@@ -103,6 +106,23 @@ def build_chat_prompt_from_messages(
     return builders[template_name](messages)
 
 
+def get_stop_sequences_for_model(model_name: str) -> Optional[List[str]]:
+    template_name = get_model_template_info(model_name).template
+    stops = {
+        "llama3": ["<|eot_id|>", "<|start_header_id|>user<|end_header_id|>"],
+        "mistral": ["</s>", "[INST]"],
+        "qwen": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
+        "deepseek_chatml": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
+        "deepseek": ["<|EOT|>", "### Instruction:"],
+        "phi3": ["<|end|>", "<|user|>", "<|system|>"],
+        "openchat": ["<|end_of_turn|>", "GPT4 Correct User:"],
+        "gemma": ["<end_of_turn>", "<start_of_turn>user"],
+        "wizardcoder": ["### Instruction:", "### Response:"],
+        "smollm3": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
+    }
+    return stops.get(template_name)
+
+
 def _normalize_messages(
     system_prompt: str,
     conversation_history: List[Message],
@@ -135,25 +155,36 @@ def _build_llama3_prompt(messages: List[Message]) -> str:
 
 
 def _build_mistral_prompt(messages: List[Message]) -> str:
+    """
+    Mistral Instruct format.
+    Merge the cleaned system prompt into the first user turn and emit canonical
+    `<s>[INST] ... [/INST] assistant </s>` turn boundaries so llama.cpp serves
+    Mistral-family models with the structure they expect.
+    """
     system_prompt, exchanges = _split_system_and_turns(messages)
-    if not exchanges:
-        return f"<s>[INST] {system_prompt} [/INST]"
 
+    if not exchanges:
+        clean = _strip_xml_from_system(system_prompt)
+        content = clean.strip() if clean else ""
+        return f"<s>[INST] {content} [/INST]" if content else "<s>[INST] [/INST]"
+
+    clean_system = _strip_xml_from_system(system_prompt)
     prompt_parts: List[str] = []
     first_user = True
+
     for turn in exchanges:
         role = turn["role"]
         content = turn["content"]
         if role == "user":
-            if first_user:
-                content = _merge_system_into_user(system_prompt, content)
-                prompt_parts.append(f"<s>[INST]\n{content}\n[/INST]")
-                first_user = False
-            else:
-                prompt_parts.append(f"[INST]\n{content}\n[/INST]")
+            if first_user and clean_system:
+                content = f"{clean_system}\n\n{content.strip()}"
+            normalized = content.strip()
+            prompt_parts.append(f"<s>[INST] {normalized} [/INST]")
+            first_user = False
         elif role == "assistant":
-            prompt_parts.append(f"{content}</s>")
-    return "".join(prompt_parts)
+            prompt_parts.append(f" {content.strip()} </s>")
+
+    return "".join(prompt_parts).strip()
 
 
 def _build_qwen_prompt(messages: List[Message]) -> str:
@@ -170,8 +201,16 @@ def _build_qwen_prompt(messages: List[Message]) -> str:
 
 
 def _build_deepseek_prompt(messages: List[Message]) -> str:
+    """
+    DeepSeek legacy instruction format.
+    System prompt is prepended as raw text after XML stripping.
+    """
     system_prompt, exchanges = _split_system_and_turns(messages)
-    prompt_parts = [system_prompt.strip(), "\n\n"] if system_prompt.strip() else []
+    clean_system = _strip_xml_from_system(system_prompt)
+
+    prompt_parts: List[str] = []
+    if clean_system.strip():
+        prompt_parts.extend([clean_system.strip(), "\n\n"])
 
     for turn in exchanges:
         if turn["role"] == "user":
@@ -196,13 +235,17 @@ def _build_phi3_prompt(messages: List[Message]) -> str:
 
 
 def _build_openchat_prompt(messages: List[Message]) -> str:
+    """
+    OpenChat 3.5 GPT4 Correct format.
+    Keep system as a clean prose preamble instead of merging XML into the first user turn.
+    """
     system_prompt, turns = _split_system_and_turns(messages)
-    if turns and turns[0]["role"] == "user" and system_prompt.strip():
-        turns = turns.copy()
-        turns[0] = {"role": "user", "content": _merge_system_into_user(system_prompt, turns[0]["content"])}
-        system_prompt = ""
+    clean_system = _strip_xml_from_system(system_prompt)
 
     prompt_parts: List[str] = ["<s>"]
+    if clean_system:
+        prompt_parts.extend([clean_system, "\n\n"])
+
     for turn in turns:
         if turn["role"] == "user":
             prompt_parts.extend(
@@ -212,37 +255,87 @@ def _build_openchat_prompt(messages: List[Message]) -> str:
             prompt_parts.extend(
                 ["GPT4 Correct Assistant: ", turn["content"], "<|end_of_turn|>"]
             )
+
     prompt_parts.append("GPT4 Correct Assistant:")
     return "".join(prompt_parts)
 
 
 def _build_gemma_prompt(messages: List[Message]) -> str:
+    """
+    Gemma 2 format. Merge a cleaned system prompt into the first user turn.
+    """
     system_prompt, turns = _split_system_and_turns(messages)
-    if turns and turns[0]["role"] == "user":
-        turns = turns.copy()
-        turns[0] = {"role": "user", "content": _merge_system_into_user(system_prompt, turns[0]["content"])}
-        system_prompt = ""
+
+    if not turns:
+        if system_prompt.strip():
+            return (
+                f"<start_of_turn>user\n{system_prompt.strip()}<end_of_turn>\n"
+                "<start_of_turn>model\n"
+            )
+        return "<start_of_turn>model\n"
+
+    clean_system = _strip_xml_from_system(system_prompt)
 
     prompt_parts: List[str] = []
+    first_user_processed = False
+
     for turn in turns:
         role = "user" if turn["role"] == "user" else "model"
-        prompt_parts.extend(
-            [f"<start_of_turn>{role}\n", turn["content"], "<end_of_turn>\n"]
-        )
-    if system_prompt.strip():
+        content = turn["content"]
+
+        if role == "user" and not first_user_processed:
+            if clean_system:
+                content = f"{clean_system}\n\n{content.strip()}"
+            first_user_processed = True
+
         prompt_parts.extend(
             [
-                "<start_of_turn>user\n",
-                system_prompt.strip(),
+                f"<start_of_turn>{role}\n",
+                content,
                 "<end_of_turn>\n",
             ]
         )
+
     prompt_parts.append("<start_of_turn>model\n")
     return "".join(prompt_parts)
 
 
 def _build_wizardcoder_prompt(messages: List[Message]) -> str:
-    instruction = _build_instruction_transcript(messages)
+    """
+    WizardCoder only gets the current task plus short clean context.
+    """
+    system_prompt, turns = _split_system_and_turns(messages)
+
+    current_request = ""
+    history_pairs: List[str] = []
+    is_code_task = False
+
+    for index, turn in enumerate(turns):
+        if turn["role"] == "user" and index == len(turns) - 1:
+            current_request = turn["content"].strip()
+            is_code_task = _is_code_like_text(current_request)
+        elif turn["role"] == "user":
+            history_pairs.append(f"User: {turn['content'].strip()}")
+        elif turn["role"] == "assistant":
+            history_pairs.append(f"Assistant: {turn['content'].strip()}")
+
+    clean_system = _strip_xml_from_system(system_prompt)
+    concise_system = _truncate_words(clean_system, 100)
+
+    instruction_parts: List[str] = []
+    if concise_system:
+        instruction_parts.append(concise_system)
+        instruction_parts.append("")
+
+    if history_pairs and is_code_task:
+        recent = history_pairs[-6:]
+        instruction_parts.append("Previous conversation:")
+        instruction_parts.extend(recent)
+        instruction_parts.append("")
+
+    instruction_parts.append(current_request)
+    instruction = "\n".join(instruction_parts).strip()
+
     return (
         "Below is an instruction that describes a task. "
         "Write a response that appropriately completes the request.\n\n"
@@ -253,14 +346,24 @@ def _build_wizardcoder_prompt(messages: List[Message]) -> str:
 
 
 def _build_smollm3_prompt(messages: List[Message]) -> str:
+    """
+    SmolLM3 format with dynamic thinking mode.
+    """
     system_prompt, turns = _split_system_and_turns(messages)
     system_block = system_prompt.strip()
-    if "/think" not in system_block and "/no_think" not in system_block:
-        system_block = f"/no_think\n{system_block}".strip()
+
+    if "/think" in system_block or "/no_think" in system_block:
+        pass
+    else:
+        think_directive = "/think" if _smollm3_is_complex_query(turns) else "/no_think"
+        system_block = f"{think_directive}\n{system_block}".strip()
+
+    if not system_block:
+        system_block = "/no_think\nYou are a helpful AI assistant."
 
     prompt_parts = [
         "<|im_start|>system\n",
-        system_block if system_block else "/no_think\nYou are a helpful AI assistant.",
+        system_block,
         "\n<|im_end|>\n",
     ]
     for turn in turns:
@@ -300,6 +403,74 @@ def _merge_system_into_user(system_prompt: str, user_content: str) -> str:
     return f"{system_prompt.strip()}\n\n{user_content.strip()}"
 
 
+def _strip_xml_from_system(system_prompt: str) -> str:
+    """
+    Remove XML wrappers while preserving useful memory content as plain text.
+    """
+    if not system_prompt:
+        return ""
+
+    def replace_block(match: re.Match) -> str:
+        tag = match.group(1).lower()
+        body = match.group(2)
+        rendered = _render_plaintext_system_block(tag, body)
+        return f"\n{rendered}\n" if rendered else "\n"
+
+    xml_block_pattern = re.compile(
+        r"<(knowledge|answer_policy|conversation_rules|personal_memory_guard|"
+        r"preference_resolution|retrieved_facts|semantic_claims|episodic_context|"
+        r"project_context|document_context|research_context|identity)>\s*"
+        r"(.*?)"
+        r"\s*</\1>",
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = xml_block_pattern.sub(replace_block, system_prompt)
+    cleaned = re.sub(r"IMPORTANT:.*?(?=\n|$)", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"Local Knowledge Confidence:.*?(?=\n|$)", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"Web Research Allowed:.*?(?=\n|$)", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"System Time:.*?(?=\n|$)", "", cleaned, flags=re.MULTILINE)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _truncate_words(text: str, limit: int) -> str:
+    if not text:
+        return ""
+    words = text.split()
+    if len(words) <= limit:
+        return text.strip()
+    return " ".join(words[:limit]).strip()
+
+
+def _render_plaintext_system_block(tag: str, body: str) -> str:
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines:
+        return ""
+
+    if tag in {
+        "knowledge",
+        "retrieved_facts",
+        "semantic_claims",
+        "episodic_context",
+        "project_context",
+        "document_context",
+        "research_context",
+        "identity",
+    }:
+        facts = []
+        for line in lines:
+            line = re.sub(r"^\[id=[^\]]+\]\s*", "", line)
+            line = re.sub(r"\s+\|\s+confidence=.*$", "", line)
+            line = re.sub(r"\s+\|\s+score=.*$", "", line)
+            line = re.sub(r"\s+\|\s+source=.*$", "", line)
+            cleaned = line.strip(" -")
+            if cleaned:
+                facts.append(cleaned)
+        return "\n".join(facts)
+
+    return "\n".join(lines)
+
+
 def _build_instruction_transcript(messages: List[Message]) -> str:
     system_prompt, turns = _split_system_and_turns(messages)
     if not turns:
@@ -320,6 +491,74 @@ def _build_instruction_transcript(messages: List[Message]) -> str:
         sections.extend(["Conversation History:\n", "\n".join(history_lines), "\n\n"])
     sections.extend(["Current Request:\n", current_user.strip()])
     return "".join(sections).strip()
+
+
+def _smollm3_is_complex_query(turns: List[Message]) -> bool:
+    if not turns:
+        return False
+    last_user = next(
+        (turn["content"].lower() for turn in reversed(turns) if turn["role"] == "user"),
+        "",
+    )
+    complex_markers = (
+        "explain",
+        "why",
+        "how does",
+        "reasoning",
+        "step by step",
+        "calculate",
+        "prove",
+        "derive",
+        "analyze",
+        "compare",
+        "difference between",
+        "advantage",
+        "disadvantage",
+        "trade-off",
+        "math",
+        "equation",
+        "logic",
+        "algorithm complexity",
+    )
+    return any(marker in last_user for marker in complex_markers)
+
+
+def _is_code_like_text(text: str) -> bool:
+    lowered = (text or "").lower().strip()
+    code_markers = (
+        "write a",
+        "write the",
+        "create a",
+        "create the",
+        "implement",
+        "build a",
+        "build the",
+        "code a",
+        "code the",
+        "function",
+        "class ",
+        "script",
+        "algorithm",
+        "program",
+        "module",
+        "snippet",
+        "debug",
+        "fix the bug",
+        "fix this",
+        "refactor",
+        "optimize the",
+        "unit test",
+        "generate code",
+        "snake game",
+        "pygame",
+        "flask",
+        "fastapi",
+        "sql query",
+        "regex",
+        "decorator",
+        "recursion",
+    )
+    return any(marker in lowered for marker in code_markers)
 
 
 def _detect_model_size_b(model_name: str) -> Optional[float]:

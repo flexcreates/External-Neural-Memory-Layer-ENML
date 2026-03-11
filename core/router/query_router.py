@@ -7,7 +7,7 @@ from core.config import (
 )
 from core.logger import get_logger
 from core.llm_runtime import detect_server_model
-from core.prompt_templates import build_chat_prompt_from_messages
+from core.prompt_templates import build_chat_prompt_from_messages, get_stop_sequences_for_model
 from openai import OpenAI
 
 logger = get_logger(__name__)
@@ -34,8 +34,9 @@ class QueryRouter:
                         "role": "system",
                         "content": (
                             "Classify the query into exactly one tag: "
-                            "personal_query, project_query, document_query, research_query. "
-                            "Pure arithmetic, counting, continuation requests, and casual non-project tasks should default to personal_query fallback. "
+                            "personal_query, project_query, document_query, research_query, general_query. "
+                            "Use personal_query only for questions about the user's identity, preferences, possessions, or past interactions. "
+                            "Use general_query for ordinary world knowledge, explanations, science, math, definitions, or concept questions. "
                             "Reply with only the tag."
                         ),
                     },
@@ -47,6 +48,7 @@ class QueryRouter:
                 prompt=prompt,
                 temperature=0.0,
                 max_tokens=10,
+                stop=get_stop_sequences_for_model(self.model_name),
             )
             intent = response.choices[0].text.strip().lower()
             mapped = {
@@ -54,6 +56,7 @@ class QueryRouter:
                 "project_query": QDRANT_PROJECT_COLLECTION,
                 "document_query": QDRANT_DOCUMENT_COLLECTION,
                 "research_query": QDRANT_RESEARCH_COLLECTION,
+                "general_query": QDRANT_RESEARCH_COLLECTION,
             }.get(intent)
             if mapped:
                 logger.info(f"[ROUTE] LLM intent route → {intent} => {mapped}")
@@ -86,7 +89,12 @@ class QueryRouter:
         if any(token in text for token in ["project", "code", "repo", "repository", "function", "class", "module", "script", "architecture"]):
             return QDRANT_PROJECT_COLLECTION
 
-        if any(token in text for token in ["research", "explain", "what is", "how does", "compare", "framework"]):
+        research_markers = [
+            "research", "paper", "study", "citation", "source", "journal", "evidence",
+            "explain", "what is", "what are", "how does", "how do", "compare", "framework",
+            "theory", "principle", "concept",
+        ]
+        if any(token in text for token in research_markers):
             return QDRANT_RESEARCH_COLLECTION
 
         return None

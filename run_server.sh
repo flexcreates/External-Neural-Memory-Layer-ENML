@@ -52,6 +52,149 @@ fi
 HOST="0.0.0.0"
 CONTEXT_SIZE="${CONTEXT_SIZE:-$(read_env_value CONTEXT_SIZE || printf '4096')}"
 BATCH_SIZE=512
+CACHE_TYPE_K="${CACHE_TYPE_K:-$(read_env_value CACHE_TYPE_K || printf 'q8_0')}"
+CACHE_TYPE_V="${CACHE_TYPE_V:-$(read_env_value CACHE_TYPE_V || printf 'q8_0')}"
+MIN_CONTEXT_SIZE="${MIN_CONTEXT_SIZE:-$(read_env_value MIN_CONTEXT_SIZE || printf '1024')}"
+CONTEXT_STEP="${CONTEXT_STEP:-$(read_env_value CONTEXT_STEP || printf '256')}"
+KV_VRAM_FRACTION="${KV_VRAM_FRACTION:-$(read_env_value KV_VRAM_FRACTION || printf '0.06')}"
+
+get_model_size_b() {
+    local model_name="$1"
+    if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+        printf 'unknown'
+        return
+    fi
+
+    "$PYTHON_BIN" -c 'from core.prompt_templates import get_model_template_info; import sys
+info = get_model_template_info(sys.argv[1])
+print(info.size_b if info.size_b is not None else "unknown", end="")' "$model_name"
+}
+
+get_cache_quant_factor() {
+    local cache_type="$1"
+    case "${cache_type,,}" in
+        q4* ) printf '0.50' ;;
+        q5* ) printf '0.625' ;;
+        q6* ) printf '0.75' ;;
+        q8* ) printf '1.00' ;;
+        f16|bf16 ) printf '2.00' ;;
+        f32 ) printf '4.00' ;;
+        * ) printf '1.00' ;;
+    esac
+}
+
+estimate_kv_mb_per_token() {
+    local model_size_b="$1"
+    local cache_factor_k="$2"
+    local cache_factor_v="$3"
+
+    awk -v size="$model_size_b" -v kf="$cache_factor_k" -v vf="$cache_factor_v" '
+        BEGIN {
+            if (size == "unknown" || size == "") {
+                base = 0.07;
+            } else if (size <= 4.5) {
+                base = 0.035;
+            } else if (size <= 8.5) {
+                base = 0.070;
+            } else if (size <= 14.0) {
+                base = 0.110;
+            } else if (size <= 24.0) {
+                base = 0.180;
+            } else {
+                base = 0.260;
+            }
+            factor = (kf + vf) / 2.0;
+            printf "%.6f\n", base * factor;
+        }
+    '
+}
+
+estimate_model_footprint_mb() {
+    local model_size_b="$1"
+
+    awk -v size="$model_size_b" '
+        BEGIN {
+            if (size == "unknown" || size == "") {
+                print 2600;
+            } else {
+                printf "%d\n", int((size * 340.0) + 0.5);
+            }
+        }
+    '
+}
+
+estimate_runtime_overhead_mb() {
+    local model_size_b="$1"
+    local batch_size="$2"
+
+    awk -v size="$model_size_b" -v batch="$batch_size" '
+        BEGIN {
+            if (size == "unknown" || size == "") {
+                base = 900;
+            } else if (size <= 4.5) {
+                base = 550;
+            } else if (size <= 8.5) {
+                base = 900;
+            } else if (size <= 14.0) {
+                base = 1250;
+            } else if (size <= 24.0) {
+                base = 1800;
+            } else {
+                base = 2400;
+            }
+            batch_overhead = batch * 0.50;
+            printf "%d\n", int(base + batch_overhead + 0.5);
+        }
+    '
+}
+
+get_effective_context_size() {
+    local fallback_context="$1"
+    local free_vram_mb="$2"
+    local reserve_mb="$3"
+    local kv_vram_fraction="$4"
+    local kv_mb_per_token="$5"
+    local min_context_size="$6"
+    local context_step="$7"
+    local model_footprint_mb="$8"
+    local runtime_overhead_mb="$9"
+
+    if [ -z "$free_vram_mb" ] || [ "$free_vram_mb" = "N/A" ]; then
+        printf '%s\n' "$fallback_context"
+        return
+    fi
+
+    awk \
+        -v fallback_ctx="$fallback_context" \
+        -v free_mb="$free_vram_mb" \
+        -v reserve_mb="$reserve_mb" \
+        -v frac="$kv_vram_fraction" \
+        -v kv_per_token="$kv_mb_per_token" \
+        -v min_ctx="$min_context_size" \
+        -v step="$context_step" \
+        -v model_mb="$model_footprint_mb" \
+        -v runtime_mb="$runtime_overhead_mb" '
+        BEGIN {
+            usable = free_mb - reserve_mb;
+            if (usable < 0) usable = 0;
+            kv_budget_fraction = usable * frac;
+            kv_budget_runtime = usable - model_mb - runtime_mb;
+            kv_budget = kv_budget_fraction;
+            if (kv_budget_runtime < kv_budget) kv_budget = kv_budget_runtime;
+            if (kv_budget < 96) {
+                ctx = min_ctx;
+            } else {
+                ctx = int(kv_budget / kv_per_token);
+            }
+            if (ctx < min_ctx) ctx = min_ctx;
+            if (step > 0) {
+                ctx = int(ctx / step) * step;
+                if (ctx < min_ctx) ctx = min_ctx;
+            }
+            printf "%d\n", ctx;
+        }
+    '
+}
 
 describe_model_template() {
     local model_name="$1"
@@ -98,6 +241,7 @@ MODEL_PATH="${models[$((model_idx-1))]}"
 MODEL_BASENAME="$(basename "$MODEL_PATH")"
 MODEL_ALIAS="${MODEL_BASENAME%.gguf}"
 MODEL_TEMPLATE_INFO="$(describe_model_template "$MODEL_BASENAME")"
+MODEL_SIZE_B="$(get_model_size_b "$MODEL_BASENAME")"
 echo "Selected: ${MODEL_BASENAME} ${MODEL_TEMPLATE_INFO}"
 
 if [[ "$LLAMA_SERVER" == "/path/to/"* ]]; then
@@ -115,11 +259,17 @@ fi
 # Delegates exact layer fitting to llama.cpp using native --fit flags.
 # Leaves exactly BREATHING_ROOM free regardless of model size or processes.
 BREATHING_ROOM=300           # MB — strict buffer to always keep free
+KV_CACHE_FACTOR_K="$(get_cache_quant_factor "$CACHE_TYPE_K")"
+KV_CACHE_FACTOR_V="$(get_cache_quant_factor "$CACHE_TYPE_V")"
+KV_MB_PER_TOKEN="$(estimate_kv_mb_per_token "$MODEL_SIZE_B" "$KV_CACHE_FACTOR_K" "$KV_CACHE_FACTOR_V")"
+MODEL_FOOTPRINT_MB="$(estimate_model_footprint_mb "$MODEL_SIZE_B")"
+RUNTIME_OVERHEAD_MB="$(estimate_runtime_overhead_mb "$MODEL_SIZE_B" "$BATCH_SIZE")"
 
 if command -v nvidia-smi &>/dev/null; then
     TOTAL_VRAM=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits 2>/dev/null | head -n1)
     FREE_VRAM=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -n1)
     USED_VRAM=$((TOTAL_VRAM - FREE_VRAM))
+    EFFECTIVE_CONTEXT_SIZE="$(get_effective_context_size "$CONTEXT_SIZE" "$FREE_VRAM" "$BREATHING_ROOM" "$KV_VRAM_FRACTION" "$KV_MB_PER_TOKEN" "$MIN_CONTEXT_SIZE" "$CONTEXT_STEP" "$MODEL_FOOTPRINT_MB" "$RUNTIME_OVERHEAD_MB")"
     
     # Max theoretical layers are implicitly handled by --fit on
     
@@ -131,6 +281,7 @@ else
     USED_VRAM="N/A"
     AVAILABLE="N/A"
     GPU_PROCS=""
+    EFFECTIVE_CONTEXT_SIZE="$CONTEXT_SIZE"
 fi
 
 # ── Startup Banner ───────────────────────────────────────────────────
@@ -141,7 +292,9 @@ echo "  Model:     ${MODEL_BASENAME}"
 echo "  Alias:     ${MODEL_ALIAS}"
 echo "  Template:  ${MODEL_TEMPLATE_INFO}"
 echo "  URL:       http://localhost:$PORT"
-echo "  Context:   ${CONTEXT_SIZE} tokens | Batch: ${BATCH_SIZE}"
+echo "  Context:   ${EFFECTIVE_CONTEXT_SIZE} tokens | Batch: ${BATCH_SIZE}"
+echo "  KV Cache:  K=${CACHE_TYPE_K} | V=${CACHE_TYPE_V}"
+echo "  KV Policy: min(${KV_VRAM_FRACTION} * free VRAM, free - reserve - model - runtime) | ~${KV_MB_PER_TOKEN} MiB/token"
 echo "  Metrics:   llama.cpp metrics enabled"
 echo ""
 echo "  ── GPU Resource Allocation ──"
@@ -150,6 +303,8 @@ if [ "$TOTAL_VRAM" != "N/A" ]; then
     echo "  Used:      ${USED_VRAM}MB (by other processes)"
     echo "  Free:      ${FREE_VRAM}MB"
     echo "  Reserved:  ${BREATHING_ROOM}MB (strict buffer via llama.cpp)"
+    echo "  Model Est: ${MODEL_FOOTPRINT_MB}MB"
+    echo "  Runtime:   ${RUNTIME_OVERHEAD_MB}MB"
     echo "  Budget:    Dynamic (managed precisely by llama.cpp)"
     echo "  Layers:    Auto-managed by llama.cpp (--fit on)"
     echo ""
@@ -184,11 +339,13 @@ fi
 "$LLAMA_SERVER" \
     -m "$MODEL_PATH" \
     --alias "$MODEL_ALIAS" \
-    -c "$CONTEXT_SIZE" \
+    -c "$EFFECTIVE_CONTEXT_SIZE" \
     --fit on \
     --fit-target "$BREATHING_ROOM" \
     -b "$BATCH_SIZE" \
     --cache-ram 2048 \
+    --cache-type-k "$CACHE_TYPE_K" \
+    --cache-type-v "$CACHE_TYPE_V" \
     --parallel 1 \
     --mlock \
     --flash-attn on \

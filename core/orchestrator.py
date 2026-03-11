@@ -13,7 +13,7 @@ from .memory.types import MemoryRecord, MemoryType
 from .runtime_replay import RuntimeReplayLogger
 from .router.model_router import ModelRouter
 from .llm_runtime import detect_server_model
-from .prompt_templates import build_chat_prompt_from_messages
+from .prompt_templates import build_chat_prompt_from_messages, get_model_template_info, get_stop_sequences_for_model
 
 logger = get_logger(__name__)
 
@@ -41,10 +41,11 @@ class Orchestrator:
 
     def _tuned_temperature(self, user_input: str, model_name: str, base_temperature: float) -> float:
         text = (user_input or "").lower()
-        if "deepseek-coder" in model_name.lower():
-            if any(token in text for token in ["code", "python", "rust", "bug", "script", "function", "class"]):
-                return min(base_temperature, 0.3)
-            return min(base_temperature, 0.2)
+        template_info = get_model_template_info(model_name)
+        if template_info.family in {"wizardcoder", "deepseek-coder", "qwen-coder"}:
+            return base_temperature
+        if any(token in text for token in ["code", "python", "rust", "bug", "script", "function", "class"]):
+            return min(base_temperature, 0.3)
         return base_temperature
         
     def process_message(self, 
@@ -109,6 +110,9 @@ class Orchestrator:
         logger.info(
             f"[LLM] Calling model={model_name}, temp={temperature}, max_tokens={max_tokens}, prompt_chars={len(prompt_text)}"
         )
+        logger.info(
+            f"[LLM] Prompt head (~200 chars): {prompt_text[:200].replace(chr(10), ' ')}"
+        )
         logger.debug(f"[LLM] Prompt preview: {prompt_text[:400]}...")
         try:
             llm_start = time.perf_counter()
@@ -118,7 +122,8 @@ class Orchestrator:
                 stream=True,
                 temperature=temperature,
                 top_p=0.9,
-                max_tokens=max_tokens
+                max_tokens=max_tokens,
+                stop=get_stop_sequences_for_model(model_name),
             )
             
             full_response = ""
@@ -214,7 +219,8 @@ class Orchestrator:
                 model=model_name,
                 prompt=rendered_prompt,
                 temperature=0.0,
-                max_tokens=200
+                max_tokens=200,
+                stop=get_stop_sequences_for_model(model_name),
             )
             summary = response.choices[0].text.strip()
             

@@ -35,6 +35,7 @@ fi
 
 CONTAINER_NAME="enml-qdrant"
 STORAGE_DIR="$SCRIPT_DIR/qdrant_storage"
+DOCKER_RUN_USER="${DOCKER_RUN_USER:-}"
 
 if ! command -v docker >/dev/null 2>&1; then
     echo "Docker is required to run Qdrant."
@@ -55,15 +56,33 @@ mkdir -p "$STORAGE_DIR"
 
 echo "=== ENML Qdrant Startup ==="
 
+DOCKER_RUN_ARGS=(
+  -d
+  --name "$CONTAINER_NAME"
+  -p "$PORT:6333"
+  -v "$STORAGE_DIR:/qdrant/storage"
+  --restart unless-stopped
+)
+
+if [ -n "$DOCKER_RUN_USER" ]; then
+    DOCKER_RUN_ARGS+=(--user "$DOCKER_RUN_USER")
+fi
+
 if $DOCKER_CMD ps -a --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
-    if $DOCKER_CMD ps --format '{{.Names}}' | grep -Eq "^${CONTAINER_NAME}\$"; then
+    STATUS="$($DOCKER_CMD inspect -f '{{.State.Status}}' "$CONTAINER_NAME" 2>/dev/null || true)"
+    if [ "$STATUS" = "running" ]; then
         echo "Qdrant already running at ${QDRANT_URL}"
         exit 0
     fi
-    echo "Starting existing Qdrant container..."
-    $DOCKER_CMD start "$CONTAINER_NAME" >/dev/null
-    echo "Qdrant started at ${QDRANT_URL}"
-    exit 0
+    if [ "$STATUS" = "restarting" ] || [ "$STATUS" = "exited" ] || [ "$STATUS" = "dead" ]; then
+        echo "Removing unhealthy existing Qdrant container..."
+        $DOCKER_CMD rm -f "$CONTAINER_NAME" >/dev/null
+    else
+        echo "Starting existing Qdrant container..."
+        $DOCKER_CMD start "$CONTAINER_NAME" >/dev/null
+        echo "Qdrant started at ${QDRANT_URL}"
+        exit 0
+    fi
 fi
 
 if command -v lsof >/dev/null 2>&1 && lsof -i :"$PORT" >/dev/null 2>&1; then
@@ -72,11 +91,6 @@ if command -v lsof >/dev/null 2>&1 && lsof -i :"$PORT" >/dev/null 2>&1; then
 fi
 
 echo "Starting new Qdrant container..."
-$DOCKER_CMD run -d \
-  --name "$CONTAINER_NAME" \
-  -p "$PORT:6333" \
-  -v "$STORAGE_DIR:/qdrant/storage" \
-  --restart unless-stopped \
-  qdrant/qdrant >/dev/null
+$DOCKER_CMD run "${DOCKER_RUN_ARGS[@]}" qdrant/qdrant >/dev/null
 
 echo "Qdrant running at ${QDRANT_URL}"

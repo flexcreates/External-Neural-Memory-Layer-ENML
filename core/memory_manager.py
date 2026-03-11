@@ -88,10 +88,13 @@ class MemoryManager:
                             "heading": heading,
                             "score": round(score, 3),
                             "type": memory_type,
-                            "source_collection": c
+                            "source_collection": c,
+                            "confidence": float(payload.get("confidence", score)),
                         })
             except Exception as e:
                 logger.debug(f"[RETRIEVE] Search failed on {c}: {e}")
+
+        scored_items.extend(self._load_local_record_items(query))
                 
         # Deduplicate summaries just in case
         seen_summaries = set()
@@ -228,6 +231,8 @@ class MemoryManager:
             if subject == "user" and self._is_user_identity_fact(predicate):
                 self._store_user_fact(predicate, obj)
                 # We still allow it to flow into the Knowledge Graph as a standard fact for retrieval/history
+            elif subject == "user":
+                self._store_user_profile_fact(predicate, obj)
 
             
             # ── ROUTE 2: User/entity facts → Knowledge Graph + Qdrant ──
@@ -299,7 +304,7 @@ class MemoryManager:
             return MemoryType.DOCUMENT.value
         if self._is_user_identity_fact(predicate) or payload.get("namespace") == "user.identity":
             return MemoryType.IDENTITY.value
-        if predicate in {"likes", "loves"}:
+        if predicate in {"likes", "loves", "has_favourite_color", "has_favorite_color", "favorite_color", "favourite_color"}:
             return MemoryType.PREFERENCE.value
         if payload.get("memory_type"):
             return payload["memory_type"]
@@ -307,7 +312,11 @@ class MemoryManager:
 
     def _load_authority_identity_items(self, query: str) -> List[Dict[str, Any]]:
         query_lower = query.lower()
-        if not any(token in query_lower for token in ["my ", "who am i", "my name", "my age", "your name", "who are you"]):
+        if not any(token in query_lower for token in [
+            "my ", "who am i", "my name", "my age", "your name", "who are you",
+            "profession", "proffesion", "job", "occupation", "favorite color",
+            "favourite color", "fav color", "colour", "about me",
+        ]):
             return []
 
         profile = self.authority_memory.load()
@@ -335,6 +344,28 @@ class MemoryManager:
                 "source_collection": "authority_memory",
                 "confidence": 0.99,
             })
+        if any(token in query_lower for token in ["profession", "proffesion", "job", "occupation"]) and user_data.get("profession"):
+            items.append({
+                "id": "authority_user_profession",
+                "text": f"user profession {user_data['profession']}",
+                "heading": "Authority Identity",
+                "score": 1.0,
+                "type": MemoryType.FACT.value,
+                "source_collection": "authority_memory",
+                "confidence": 0.99,
+            })
+        preferences = user_data.get("preferences", {})
+        favorite_color = preferences.get("favorite_color") or preferences.get("favourite_color")
+        if any(token in query_lower for token in ["favorite color", "favourite color", "fav color", "colour"]) and favorite_color:
+            items.append({
+                "id": "authority_user_favorite_color",
+                "text": f"user favorite color {favorite_color}",
+                "heading": "Authority Preferences",
+                "score": 1.0,
+                "type": MemoryType.PREFERENCE.value,
+                "source_collection": "authority_memory",
+                "confidence": 0.99,
+            })
         if any(token in query_lower for token in ["your name", "who are you"]) and assistant_data.get("name"):
             items.append({
                 "id": "authority_assistant_name",
@@ -345,6 +376,59 @@ class MemoryManager:
                 "source_collection": "authority_memory",
                 "confidence": 0.99,
             })
+        return items
+
+    def _load_local_record_items(self, query: str) -> List[Dict[str, Any]]:
+        query_lower = query.lower()
+        query_terms = {term for term in self._derive_tags(query_lower) if len(term) >= 3}
+        if not query_terms and not any(token in query_lower for token in ["who am i", "about me"]):
+            return []
+
+        items: List[Dict[str, Any]] = []
+        for record in self.record_repository.all():
+            if record.status not in {"active", "provisional"}:
+                continue
+            if record.memory_type in {MemoryType.DOCUMENT.value, MemoryType.RESEARCH.value, MemoryType.PROJECT.value}:
+                continue
+
+            haystack = " ".join(filter(None, [
+                record.claim_text,
+                record.subject,
+                record.predicate_canonical or "",
+                record.object_value or "",
+                " ".join(record.tags),
+            ])).lower()
+            if not haystack:
+                continue
+
+            overlap = sum(1 for term in query_terms if term in haystack)
+            score = 0.0
+            if overlap:
+                score = min(0.99, 0.45 + (0.12 * overlap))
+
+            predicate = (record.predicate_canonical or "").lower()
+            if any(token in query_lower for token in ["who am i", "my name"]) and predicate in {"has_name", "name"}:
+                score = max(score, 0.99)
+            if "age" in query_lower and predicate == "age":
+                score = max(score, 0.99)
+            if any(token in query_lower for token in ["profession", "proffesion", "job", "occupation"]) and predicate in {"has_profession", "profession", "occupation"}:
+                score = max(score, 0.99)
+            if any(token in query_lower for token in ["favorite color", "favourite color", "fav color", "colour"]) and predicate in {"has_favourite_color", "has_favorite_color", "favorite_color", "favourite_color"}:
+                score = max(score, 0.99)
+
+            if score < 0.5:
+                continue
+
+            items.append({
+                "id": record.memory_id,
+                "text": record.claim_text.rstrip("."),
+                "heading": "Local Memory Record",
+                "score": round(score, 3),
+                "type": record.memory_type,
+                "source_collection": "local_record_store",
+                "confidence": record.confidence,
+            })
+
         return items
 
     def _build_evidence_packet(self, policy, scored_items: List[Dict[str, Any]]) -> EvidencePacket:
@@ -426,7 +510,7 @@ class MemoryManager:
     def _resolve_memory_type_from_fact(self, predicate: str) -> str:
         if self._is_user_identity_fact(predicate):
             return MemoryType.IDENTITY.value
-        if predicate in {"likes", "loves"}:
+        if predicate in {"likes", "loves", "has_favourite_color", "has_favorite_color", "favorite_color", "favourite_color"}:
             return MemoryType.PREFERENCE.value
         return MemoryType.FACT.value
 
@@ -438,6 +522,8 @@ class MemoryManager:
         if len(lowered.split()) < 4:
             return False
         if lowered.endswith("?"):
+            return False
+        if lowered in {"hi how are you", "hello how are you", "hey how are you", "how are you"}:
             return False
         blocked_starts = ("what", "why", "how", "can you", "please", "show", "list", "tell me")
         return not lowered.startswith(blocked_starts)
@@ -577,6 +663,45 @@ class MemoryManager:
                 confidence=0.99,
                 salience=1.0,
                 namespace="user.identity",
+                metadata={"authority": True},
+            ))
+
+    def _store_user_profile_fact(self, predicate: str, value: str):
+        key = None
+        is_preference = False
+        if predicate in {"has_profession", "profession", "occupation", "job_role"}:
+            key = "profession"
+        elif predicate in {"has_favourite_color", "has_favorite_color", "favorite_color", "favourite_color"}:
+            key = "favorite_color"
+            is_preference = True
+
+        if not key:
+            return
+
+        if is_preference:
+            changed = self.authority_memory.upsert_user_preference(key, value)
+            namespace = "user.preferences"
+            memory_type = MemoryType.PREFERENCE.value
+        else:
+            changed = self.authority_memory.upsert_fact("user", key, value)
+            namespace = "user.profile"
+            memory_type = MemoryType.FACT.value
+
+        if changed:
+            logger.info(f"MemoryManager: User Profile Updated -> user.{key} = {value}")
+            self._store_memory_record(MemoryRecord(
+                memory_type=memory_type,
+                subject="user",
+                predicate_canonical=key,
+                predicate_surface=predicate,
+                object_value=value,
+                claim_text=f"user {key} {value}.",
+                tags=self._derive_tags(f"{key} {value}"),
+                entities=["user", value],
+                source_type="authority_memory",
+                confidence=0.99,
+                salience=0.95,
+                namespace=namespace,
                 metadata={"authority": True},
             ))
     

@@ -1,4 +1,6 @@
 import threading
+import urllib.error
+import urllib.request
 from qdrant_client import QdrantClient
 from qdrant_client.http import models
 
@@ -29,6 +31,7 @@ class QdrantManager:
                 if cls._instance is None:
                     instance = super().__new__(cls)
                     instance.client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY or None)
+                    instance.available = True
                     instance.collections = [
                         QDRANT_RESEARCH_COLLECTION,
                         QDRANT_PROJECT_COLLECTION,
@@ -38,12 +41,33 @@ class QdrantManager:
                         QDRANT_KNOWLEDGE_COLLECTION,
                         QDRANT_DOCUMENT_COLLECTION,
                     ]
-                    instance._ensure_collections()
+                    if instance._is_reachable():
+                        instance._ensure_collections()
+                    else:
+                        instance.available = False
+                        logger.warning(
+                            f"Qdrant is not reachable at {QDRANT_URL}. "
+                            "ENML will continue in degraded mode without vector memory until Qdrant is started."
+                        )
                     cls._instance = instance
         return cls._instance
 
+    def _is_reachable(self) -> bool:
+        base_url = QDRANT_URL.rstrip("/")
+        probe_urls = (f"{base_url}/readyz", f"{base_url}/health", f"{base_url}/")
+        for probe_url in probe_urls:
+            try:
+                request = urllib.request.Request(probe_url, method="GET")
+                with urllib.request.urlopen(request, timeout=1.5) as response:
+                    if 200 <= getattr(response, "status", 0) < 300:
+                        return True
+            except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+                logger.debug(f"Qdrant probe failed for '{probe_url}': {exc}")
+        return False
+
     def _ensure_collections(self):
         """Creates any missing Qdrant collections with dense and sparse configured."""
+        failures = 0
         for collection_name in self.collections:
             try:
                 if not self.client.collection_exists(collection_name):
@@ -73,4 +97,11 @@ class QdrantManager:
                             }
                         )
             except Exception as e:
+                failures += 1
                 logger.error(f"Failed to ensure collection '{collection_name}': {e}")
+        if failures:
+            self.available = False
+            logger.warning(
+                f"Qdrant is unavailable ({failures}/{len(self.collections)} collection checks failed). "
+                "ENML will continue in degraded mode without vector memory until Qdrant is reachable."
+            )
