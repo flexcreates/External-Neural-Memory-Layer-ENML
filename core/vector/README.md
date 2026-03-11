@@ -1,52 +1,56 @@
 # Vector Subsystem
 
-The vector subsystem manages embedding generation, Qdrant connection lifecycle, and semantic retrieval with hybrid re-ranking.
+The vector subsystem manages embeddings, Qdrant availability, and hybrid retrieval.
 
-## Files
+## Main Files
 
-### `embeddings.py` — EmbeddingService (Singleton)
-Wraps `SentenceTransformer` (`all-MiniLM-L6-v2`) as a thread-safe singleton. The model (~90 MB) is loaded once and shared across all callers.
-
-**Usage:**
-```python
-from core.vector.embeddings import EmbeddingService
-service = EmbeddingService()  # Same instance every time
-vector = service.embed("user has_name Flex.")  # Returns list[float] of 384 dims
-```
-
----
-
-### `qdrant_client.py` — QdrantManager (Singleton)
-Manages the Qdrant client connection and ensures all required collections exist. Thread-safe singleton — one connection per process.
-
-**Collections managed:**
-| Collection | Purpose |
+| File | Purpose |
 |---|---|
-| `knowledge_collection` | Semantic triple facts (primary memory) |
-| `conversation_collection` | Ingested conversation transcripts |
-| `research_collection` | Web/document research chunks |
-| `project_collection` | Ingested code file chunks |
-| `profile_collection` | User profile embeddings |
+| `embeddings.py` | dense and sparse embedding services |
+| `qdrant_client.py` | Qdrant singleton manager and collection lifecycle |
+| `retriever.py` | insertions, hybrid search, reranking, and query expansion |
 
----
+## Current Embeddings
 
-### `retriever.py` — Hybrid Semantic Search
-The `Retriever` class handles both insertions and search with a two-stage retrieval pipeline:
+- dense embeddings: `BAAI/bge-base-en-v1.5`
+- sparse embeddings: `Qdrant/bm25`
+- reranker: `BAAI/bge-reranker-base`
 
-1. **Broad Vector Search** — queries Qdrant for 2× the requested limit
-2. **Local Re-Ranking** — applies keyword matching boosts:
-   - Subject match: +0.20
-   - Predicate match: +0.10
-   - Object match: +0.15
-3. **Status Filtering** — superseded facts are automatically excluded
-4. **Filter Support** — accepts both raw `FieldCondition` lists and simple `filter_dict` key-value pairs
+These run on CPU in the current architecture so the GGUF server can keep the GPU.
 
-**Search Example:**
-```python
-results = retriever.search(
-    collection="knowledge_collection",
-    query="what is the user's name",
-    limit=5,
-    filter_dict={"subject": "user", "predicate": "has_name"}
-)
+## Collections
+
+The current Qdrant manager ensures these collections exist:
+
+- `research_collection`
+- `project_collection`
+- `conversation_collection`
+- `episodic_collection`
+- `profile_collection`
+- `knowledge_collection`
+- `document_collection`
+
+## Current Retrieval Behavior
+
+The retriever:
+
+1. performs hybrid sparse+dense retrieval
+2. optionally expands the query into additional search variants
+3. reranks candidates with the cross-encoder
+4. applies recency and lightweight entity boosts
+5. filters out superseded facts
+
+## Degraded Mode
+
+If Qdrant is unreachable:
+
+- startup does not fail
+- inserts are skipped with warnings
+- vector search returns no vector results
+- authority memory and local record fallback still work elsewhere in the system
+
+Primary check:
+
+```bash
+curl http://localhost:6333/readyz
 ```

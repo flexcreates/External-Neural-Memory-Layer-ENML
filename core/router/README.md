@@ -1,24 +1,41 @@
 # Router Subsystem
 
-The router subsystem determines which Qdrant collection should be searched for a given user query.
+The router subsystem decides where retrieval or model-selection logic should go next.
 
-## Files
+## Main Files
 
-### `query_router.py` — QueryRouter
+| File | Purpose |
+|---|---|
+| `query_router.py` | routes user queries to the most relevant collection |
+| `model_router.py` | lightweight heuristic model selector for helper LLM calls |
+| `model_profiles.py` | prompt-budget/model-profile definitions |
 
-**Intent Classification** uses keyword matching to route queries:
+## Query Routing
 
-| Priority | Intent | Keywords | Target Collection |
-|---|---|---|---|
-| 1 (Highest) | Identity/Profile | "my name", "who am i", "my pc", "what is my" | `knowledge_collection` |
-| 2 | Project/Code | "codebase", "function", "class", ".py" | `project_collection` |
-| 3 | Research | "explain", "how does", "what is", "theory" | `research_collection` |
-| 4 (Fallback) | General | Everything else | `conversation_collection` |
+`query_router.py` combines heuristics with an LLM fallback classifier.
 
-**Self-Referential Override:** The `MemoryManager` applies a secondary check — if a query routed to `conversation_collection` contains self-referential words ("my", "I", "me"), it is re-routed to `knowledge_collection`.
+Current target collections:
 
-**Extending the Router:**
-To add a new collection, update:
-1. `core/config.py` — add the collection name constant
-2. `core/vector/qdrant_client.py` — add to the `collections` list
-3. `core/router/query_router.py` — add keyword patterns
+- `knowledge_collection`
+- `project_collection`
+- `document_collection`
+- `research_collection`
+
+Important current behavior:
+
+- explicit personal phrasing is routed to `knowledge_collection`
+- many general world-knowledge prompts are routed to `research_collection`
+- some short general tasks still bypass broad research routing and stay on the knowledge path because the retrieval policy may later decide memory should not be forced
+
+## Model Routing
+
+`model_router.py` is used mainly for helper calls such as summarization/classification.
+
+It chooses between:
+
+- `FAST_CHAT_MODEL`
+- `CODING_CHAT_MODEL`
+- `REASONING_CHAT_MODEL`
+- `DEFAULT_CHAT_MODEL`
+
+This is separate from the active `llama-server` model-detection path used by the main prompt template layer.

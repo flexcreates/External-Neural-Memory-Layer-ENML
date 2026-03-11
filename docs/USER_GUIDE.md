@@ -1,242 +1,176 @@
 # ENML User Guide
 
-This guide covers first-time setup, normal usage, memory behavior, model startup, and common debugging.
+This guide covers normal usage of the current ENML runtime.
 
 ## Quick Start
 
-1. Run setup:
-
 ```bash
 ./setup.sh
-```
-
-2. Review `.env` and update:
-
-- `MODELS_DIR`
-- `LLAMA_SERVER`
-- `ALLOWED_PATHS`
-- `AI_NAME`
-
-3. Start Qdrant:
-
-```bash
 ./run_qdrant.sh
-```
-
-4. Start the model server:
-
-```bash
 ./run_server.sh
-```
-
-5. Start ENML:
-
-```bash
 source .venv/bin/activate
 python3 chat.py
 ```
 
-Or run the web UI:
+Web UI:
 
 ```bash
 ./run_web.sh
 ```
 
-## What ENML Does
+## What ENML Learns
 
-ENML learns from your messages, stores extracted facts and preferences, retrieves relevant evidence later, and grounds answers using that evidence.
+ENML is best at:
 
-It has three important memory layers:
-
-- authority memory: deterministic profile in `memory/authority/profile.json`
-- vector memory: Qdrant collections for knowledge, project, research, document, and episodic retrieval
-- session history: JSON conversation logs in `memory/conversations/...`
-
-## Teaching The System
-
-Natural examples:
-
-```text
-my name is Flex
-I am 22 years old
-my graphics card has 6GB VRAM
-I like creating art
-I love working on my projects
-I have a dog named Bruno
-```
-
-Useful notes:
-
-- ENML extracts from your messages, not from the assistant's responses.
-- `like` and `love` are now stored separately for new memories.
-- corrections such as `actually my graphics card has 6GB vram` are intended to update memory.
-
-You can also force-save a message:
-
-```text
-/remember I prefer concise responses
-```
-
-## Asking About Memory
+- identity facts
+- preferences
+- possessions and system specs
+- project/document/research summaries
+- recent episodic conversation context
 
 Examples:
 
 ```text
+my name is Flex
+my favorite color is scion blue
+my profession is vibecoding
+my laptop is a Lenovo Loq
+i like ubuntu linux
+```
+
+Corrections also matter:
+
+```text
+actually my laptop name is only Lenovo Loq
+actually i deleted windows today
+```
+
+## What Happens To Large Pasted Text
+
+Large pasted content is treated as a document instead of a normal chat turn.
+
+The document path:
+
+- splits content into sections
+- summarizes sections with the active LLM
+- stores summaries in document, project, or research memory depending on classification
+- extracts factual claims where possible
+
+This behavior exists in both the CLI and the web UI.
+
+## Asking Memory Questions
+
+Good recall prompts:
+
+```text
 what is my name?
+what is my profession?
+what are my laptop specs?
+what do you know about me?
 what is my favorite color?
-what do i like?
-what do i love?
-what are my system specs?
 ```
 
 Expected behavior:
 
-- if evidence exists, ENML should answer from memory
-- if evidence is missing, ENML should avoid guessing personal facts
-- responses should stay short for direct recall questions
+- direct recall questions should be short and factual
+- missing memories should produce an explicit unknown, not a guess
+- ordinary conversation should not be forced through strict memory recall
 
 ## Sessions
 
-New sessions are created automatically:
+Sessions are created automatically and saved under:
 
 ```text
-session_YYYYMMDD_HHMMSS
+memory/conversations/YYYY/MM/session_YYYYMMDD_HHMMSS.json
 ```
 
-Sessions are saved to:
-
-```text
-memory/conversations/YYYY/MM/session_....json
-```
-
-Resume a session:
+Resume one with:
 
 ```bash
-python3 chat.py --session session_20260310_215921
+python3 chat.py --session session_20260311_143847
 ```
 
-## Documents And Large Input
-
-Large pasted content is classified as document input and ingested separately.
-
-CLI:
-
-- normal chat stays in the conversation loop
-- long pasted content is treated as document content
-
-Web:
-
-- the same behavior is exposed through the web UI
-
-## Model Startup
-
-`run_server.sh` scans your model directory and shows:
-
-- model filename
-- template support: `[ok]` or `[no]`
-- detected family
-- approximate parameter size
-
-Example:
-
-```text
-[2] gemma-2-9b-it-Q4_K_M.gguf [ok] [gemma] [9B]
-```
-
-Important behavior:
-
-- ENML detects the active server model from `/v1/models`
-- prompt routing follows the active server model, not just static defaults
-- internal helper models use the same template routing path
-
-## Prompt Template Families
-
-Current families:
-
-- `llama3`
-- `mistral`
-- `qwen`
-- `deepseek-coder`
-- `deepseek`
-- `gemma`
-- `phi3`
-- `openchat`
-- `wizardcoder`
-- `smollm3`
-- `generic`
-
-## Debugging
-
-Useful checks:
-
-```bash
-curl http://localhost:6333/health
-curl http://localhost:8080/health
-curl http://localhost:8080/v1/models
-curl http://localhost:5000/api/health
-```
-
-Runtime metrics:
+## Useful CLI Flags
 
 ```bash
 python3 chat.py --diagnose
 python3 chat.py --eval-runtime
 python3 chat.py --eval-citations
-python3 tools/eval_lifecycle.py --json
-python3 tools/retrieval_benchmark.py --iterations 100
 ```
 
-Main logs:
+## Useful Commands During Chat
 
-- `logs/memory_system.log`
-- `logs/pipeline.log`
-- `logs/audit.jsonl`
-- `logs/runtime_replay.jsonl`
-- `logs/citations.jsonl`
+- `exit`
+- `quit`
+- `/remember <text>`
+
+Example:
+
+```text
+/remember i prefer concise replies
+```
+
+## Startup Checks
+
+Qdrant:
+
+```bash
+curl http://localhost:6333/readyz
+```
+
+Model server:
+
+```bash
+curl http://localhost:8080/v1/models
+```
+
+Web server:
+
+```bash
+curl http://localhost:5000/api/health
+```
 
 ## Common Problems
 
-### The assistant prints strange special tokens
+### Qdrant is unavailable
 
-Cause:
+Symptom:
 
-- prompt template mismatch between the active model and ENML formatting
+- startup warning says ENML will run without vector memory
+
+What it means:
+
+- authority memory and local record memory still work
+- vector retrieval and vector persistence are disabled until Qdrant returns
+
+### The model responds with the wrong style or odd control tokens
+
+Usually means:
+
+- the running model family does not match the prompt format being used
 
 Fix:
 
-- restart `run_server.sh`
-- restart ENML
-- check `curl http://localhost:8080/v1/models`
+- restart `./run_server.sh`
+- confirm `curl http://localhost:8080/v1/models`
 
-### DeepSeek feels weak or slow
+### Mistral behaves strangely
 
-Possible reasons:
+The current prompt renderer intentionally does not prepend a manual BOS token for Mistral GGUFs. If you change prompt formatting, re-check Mistral specifically.
 
-- coder-tuned model used for general chat
-- partially offloaded layers due to VRAM limits
-- degraded GGUF conversion
-- long output budgets for short questions
-
-### Memory answers are noisy
+### Memory answers are missing
 
 Check:
 
-- `logs/pipeline.log`
 - `memory/authority/profile.json`
-- Qdrant health
-- whether the fact was ever stored in the first place
+- `logs/pipeline.log`
+- `logs/memory_system.log`
+- Qdrant readiness with `/readyz`
 
-### Setup failed on a fresh machine
+### Web UI starts but chat fails
 
-Run:
+Check:
 
-```bash
-./setup.sh
-```
-
-Then verify:
-
-- `.venv` exists
-- `.env` exists
-- Docker is installed if you want Qdrant
-- `llama-server` path in `.env` is correct
+- `run_server.sh` is running
+- `/v1/models` responds
+- `run_web.sh` exported the active model into ENML’s runtime

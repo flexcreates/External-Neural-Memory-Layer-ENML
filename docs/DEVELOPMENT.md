@@ -1,8 +1,8 @@
 # ENML Development Guide
 
-This guide covers current development workflow and the rules that matter after the recent refactors.
+This guide documents the current developer workflow.
 
-## Local Dev Setup
+## Local Setup
 
 ```bash
 ./setup.sh
@@ -10,106 +10,124 @@ source .venv/bin/activate
 python3 -m compileall core
 ```
 
-Start supporting services as needed:
+Start services as needed:
 
 ```bash
 ./run_qdrant.sh
 ./run_server.sh
+./run_web.sh
 ```
 
-## Important Runtime Rules
+## High-Risk Areas
 
-When you change prompt construction, you must check all of these paths:
-
-- main chat generation in `core/orchestrator.py`
-- query routing helper in `core/router/query_router.py`
-- context distiller in `core/context/distiller.py`
-- episodic summarization in `core/orchestrator.py`
-
-They should all follow the same active-model detection and prompt-template system.
-
-## Prompt Template Work
-
-Primary file:
+Changes in these files usually require documentation, tests, and runtime verification together:
 
 - `core/prompt_templates.py`
-
-Supporting files:
-
-- `core/llm_runtime.py`
 - `core/context_builder.py`
-- `core/orchestrator.py`
+- `core/memory_manager.py`
+- `core/memory/extractor.py`
+- `core/vector/retriever.py`
+- `core/router/query_router.py`
+- `run_server.sh`
+- `run_qdrant.sh`
 
-If you add a new model family:
+## Prompt Work
 
-1. add routing logic in `get_model_template_info`
-2. add a renderer
-3. verify `run_server.sh` classification output
-4. test at least one real prompt render
-5. make sure helper paths do not bypass the same template logic
+When editing prompt behavior:
 
-## Config Surface
+- verify the main chat path
+- verify helper LLM paths that use prompt templates indirectly
+- verify at least one Mistral-family render
+- verify at least one Llama 3 render
+- update prompt tests in `tests/test_prompt_pipeline_models.py`
 
-Runtime config is defined in:
+Important current rule:
 
-- `core/config.py`
+- Mistral prompt construction should not manually prepend `<s>` for the current GGUF server path
+
+## Server Startup Work
+
+`run_server.sh` is no longer a simple shell wrapper.
+
+Current behavior:
+
+- parses `.env` without shell-sourcing it
+- enumerates GGUF models
+- reads model `context_length` from the GGUF header
+- uses `llama-fit-params` to plan context and GPU layer count
+- launches `llama-server` with explicit `-c` and `--gpu-layers`
+
+If you change startup logic, update:
+
+- `README.md`
+- `docs/USER_GUIDE.md`
+- `docs/RESOURCE_ARCHITECTURE.md`
 - `.env.example`
 
-If you add a new environment variable, update both.
+## Memory Work
 
-## Setup And Ops Scripts
+Current memory behavior depends on all of these layers:
 
-Bootstrap / runtime shell scripts:
+- authority memory
+- local record repository
+- Qdrant vector memory
+- retrieval policies
+- evidence packet formatting
 
-- `setup.sh`
-- `run_qdrant.sh`
-- `run_server.sh`
-- `run_web.sh`
-- `reset_memory.sh`
+If you change extraction or memory storage rules, verify:
 
-If you change `.env` parsing or runtime assumptions, keep these scripts aligned. Avoid shell-sourcing `.env` directly when values may contain quotes, spaces, or comments.
+- direct profile statements
+- corrections
+- degraded mode with Qdrant down
+- personal recall questions
+- ordinary conversation that should not trigger strict grounding
 
-## Tests And Verification
+## Useful Checks
 
-Fast checks:
+Syntax and quick checks:
 
 ```bash
 python3 -m compileall core
-bash -n setup.sh
 bash -n run_qdrant.sh
 bash -n run_server.sh
 bash -n run_web.sh
 ```
 
-Project tests:
+Tests:
 
 ```bash
+.venv/bin/python -m unittest tests.test_prompt_pipeline_models -v
+.venv/bin/python -m unittest tests.test_transcript_regressions -v
 pytest -q
+```
+
+Runtime evaluations:
+
+```bash
 python3 chat.py --diagnose
 python3 chat.py --eval-runtime
 python3 chat.py --eval-citations
 python3 tools/eval_lifecycle.py --json
+python3 tools/retrieval_benchmark.py --iterations 100
 ```
 
 Service checks:
 
 ```bash
-curl http://localhost:6333/health
-curl http://localhost:8080/health
+curl http://localhost:6333/readyz
 curl http://localhost:8080/v1/models
 curl http://localhost:5000/api/health
 ```
 
-## Data Compatibility Notes
+## Documentation Rule
 
-- authority memory lives in `memory/authority/profile.json`
-- old stored facts may predate newer extraction rules
-- preference memories created before the `likes` / `loves` split may need migration if exact verb recall matters
+If you change:
 
-## Common Development Mistakes
+- environment variables
+- startup scripts
+- prompt family behavior
+- routing behavior
+- retrieval policy behavior
+- storage layout
 
-- updating only the main chat path but not helper LLM calls
-- documenting config keys that no longer exist
-- assuming one default model while `run_server.sh` can launch any GGUF
-- letting warning logs print into live chat output
-- over-trusting model family names when a GGUF’s embedded template says otherwise
+then update the matching markdown docs in the same change.

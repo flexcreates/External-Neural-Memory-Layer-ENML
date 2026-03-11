@@ -1,43 +1,29 @@
 # Storage Subsystem
 
-The storage subsystem handles JSON-based session persistence for conversation history.
+The storage subsystem handles JSON session persistence.
 
-## Files
+## Main File
 
-### `json_storage.py` — JSONStorage
-
-Manages conversation session files with a date-based directory structure:
-
-```
-memory/conversations/
-├── 2026/
-│   ├── 01/
-│   │   └── session_20260115_143022.json
-│   └── 02/
-│       ├── session_20260222_184853.json
-│       └── session_20260222_185354.json
-```
-
-**Session File Format:**
-```json
-{
-  "session_id": "session_20260222_184853",
-  "timestamp": "2026-02-22T18:48:53",
-  "messages": [
-    {"role": "user", "content": "my name is Flex"},
-    {"role": "assistant", "content": "Nice to meet you, Flex!"}
-  ]
-}
-```
-
-**Key Methods:**
-| Method | Description |
+| File | Purpose |
 |---|---|
-| `save_session(id, messages)` | Saves to `YYYY/MM/{id}.json` |
-| `load_session(id)` | Searches recursively (flat path + subdirectories) |
-| `list_sessions()` | Returns all session IDs across all subdirectories |
+| `json_storage.py` | save, load, and list chat sessions |
 
-**Resuming Sessions:**
-```bash
-python3 chat.py --session session_20260222_184853
+## Session Layout
+
+Sessions are stored under:
+
+```text
+memory/conversations/YYYY/MM/session_YYYYMMDD_HHMMSS.json
 ```
+
+The storage layer supports:
+
+- saving the current session
+- loading a session by ID
+- listing saved sessions across nested year/month directories
+
+## Used By
+
+- `chat.py`
+- `web_server.py`
+- `core/memory_manager.py`

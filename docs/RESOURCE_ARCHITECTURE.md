@@ -1,63 +1,105 @@
 # ENML Resource Architecture
 
-This document describes the practical resource model for ENML on typical local hardware.
+This document describes how the current system uses CPU, GPU, and storage resources.
 
-## Main Resource Consumers
+## GPU Ownership
 
-- `llama-server` for generation
-- sentence-transformer embedding model
-- reranker model
-- Qdrant
-- Python orchestration process
+In the normal local stack:
 
-## Typical Behavior
+- `llama-server` is the primary GPU consumer
+- embeddings and reranking run on CPU
+- Qdrant runs in Docker and is not the main VRAM consumer
 
-`llama-server` is the dominant VRAM consumer. ENML’s embedding and reranking models are usually CPU-side, which keeps more GPU memory available for the active GGUF.
+That split is intentional so the LLM server can keep most of the GPU.
 
-## Current Server Strategy
+## Current Server Planning Strategy
 
-`run_server.sh` plans a launch profile with `llama-fit-params`, then starts
-`llama-server` with:
+[run_server.sh](/home/flex/Projects/enml/run_server.sh) now does four things before launch:
 
-- live free VRAM from `nvidia-smi`
-- the selected GGUF model's own `context_length`
-- `FIT_TARGET_MB=512` by default
-- `FIT_CONTEXT_MIN=1024` and `FIT_CONTEXT_STEP=256` by default
-- explicit `-c <planned_context>`
-- explicit `--gpu-layers <planned_layers>`
-- `--flash-attn on`
-- `--parallel 1`
-- `--cache-ram 2048`
-- `-b 512`
+1. reads live free VRAM from `nvidia-smi`
+2. reads the selected model’s GGUF `context_length`
+3. asks `llama-fit-params` what GPU fit is possible for candidate contexts
+4. chooses the largest safe context for the current machine state, then launches `llama-server` with explicit `-c` and `--gpu-layers`
 
-That means:
+Relevant environment variables:
 
-- context is computed from current GPU headroom at launch time
-- layer offload is computed from the same launch-time GPU headroom
-- a configurable free-memory target is preserved per GPU device
-- prompt cache is enabled
-- there is no model-family-specific context cap in `run_server.sh`
-- if more VRAM is free later, the next launch can choose a larger context
-- if VRAM is tighter later, the next launch can choose a smaller context
+- `LLAMA_FIT_PARAMS`
+- `FIT_TARGET_MB`
+- `FIT_CONTEXT_MIN`
+- `FIT_CONTEXT_STEP`
+- `CACHE_TYPE_K`
+- `CACHE_TYPE_V`
 
-## Why Some Models Feel Slow
+`CONTEXT_SIZE` remains only as a fallback if the planner cannot run.
 
-Usually one or more of these:
+## What Changes At Runtime
 
-- not all layers fit on GPU
-- a large KV cache consumes VRAM
-- the GGUF conversion is degraded
-- the model is coder-tuned and weak for general chat
-- response token budgets are too large for small tasks
+The planned context is dynamic across launches.
 
-## Practical Guidance
+If more VRAM is free:
 
-- 3B to 4B models: best when you want low latency and smaller evidence windows
-- 7B class models: best balance for local chat and coding on limited VRAM
-- 9B class models: often stronger, but they may offload fewer layers and slow down depending on quant and available GPU memory
+- ENML can choose a larger context
+- more layers may still remain on GPU depending on the model
 
-## Related Scripts
+If less VRAM is free:
 
-- `run_server.sh`
-- `run_web.sh`
-- `setup.sh`
+- ENML can choose a smaller context
+- fewer layers may be offloaded
+
+This is why the effective `n_ctx` can differ between models and between launches on the same machine.
+
+## Current Retrieval Resource Split
+
+### CPU
+
+- dense embeddings via `SentenceTransformer`
+- sparse BM25 embeddings
+- cross-encoder reranking
+- document summarization helper orchestration
+
+### GPU
+
+- active GGUF inference server only
+
+### Disk
+
+- authority profile JSON
+- memory record repository JSON
+- conversation session JSON files
+- logs and metrics JSONL files
+- Qdrant storage volume
+
+## Practical Tradeoffs
+
+Large context windows are not free.
+
+Increasing context:
+
+- increases KV cache size
+- can reduce the number of layers offloaded to GPU
+- usually increases latency
+
+Reducing context:
+
+- lowers KV pressure
+- can increase GPU layer residency
+- may break recall if prompts or retrieved evidence exceed the smaller window
+
+The current planner prefers fitting the largest safe context available at launch time instead of using a fixed hard cap.
+
+## Qdrant Resource Behavior
+
+Qdrant is optional for degraded operation.
+
+When Qdrant is down:
+
+- ENML still starts
+- authority memory still works
+- local record fallback still works
+- vector inserts and vector retrieval are skipped
+
+Operational check:
+
+```bash
+curl http://localhost:6333/readyz
+```

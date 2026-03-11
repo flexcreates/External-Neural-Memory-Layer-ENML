@@ -6,6 +6,7 @@ from sentence_transformers import CrossEncoder
 from qdrant_client.http import models
 from core.logger import get_logger
 import uuid
+import re
 import threading
 
 logger = get_logger(__name__)
@@ -155,6 +156,41 @@ class Retriever:
         except Exception as e:
             logger.error(f"[RETRIEVE] Qdrant Hybrid search FAILED on '{collection}': {e}")
             return []
+
+        # 1b. Query Expansion — run supplementary SPO-form queries and merge
+        expanded_queries = self._expand_query(query)
+        for eq in expanded_queries:
+            try:
+                eq_vector = self.embedding_service.embed(eq)
+                eq_sparse_idx, eq_sparse_val = self.sparse_embedding_service.embed(eq)
+                eq_response = self.qdrant_manager.client.query_points(
+                    collection_name=collection,
+                    prefetch=[
+                        models.Prefetch(
+                            query=models.SparseVector(indices=eq_sparse_idx, values=eq_sparse_val),
+                            using="sparse",
+                            limit=limit,
+                            filter=query_filter
+                        ),
+                        models.Prefetch(
+                            query=eq_vector,
+                            using="dense",
+                            limit=limit,
+                            filter=query_filter
+                        ),
+                    ],
+                    query=models.FusionQuery(fusion=models.Fusion.RRF),
+                    limit=limit,
+                    with_payload=True
+                )
+                seen_ids = {r.id for r in results}
+                for pt in eq_response.points:
+                    if pt.id not in seen_ids:
+                        results.append(pt)
+                        seen_ids.add(pt.id)
+                logger.debug(f"[RETRIEVE] Expansion query '{eq}' added {len(eq_response.points)} candidates")
+            except Exception as e:
+                logger.debug(f"[RETRIEVE] Expansion query '{eq}' failed: {e}")
                 
         # 2. Local Re-Ranking (CrossEncoder + Entity Match + Recency)
         query_lower = query.lower()
@@ -192,11 +228,11 @@ class Retriever:
                         age_seconds = (datetime.now(dt.tzinfo) - dt).total_seconds()
                     
                     if age_seconds < 1800:       # < 30 mins
-                        score += 0.08
+                        score += 0.20
                     elif age_seconds < 7200:     # < 2 hours
-                        score += 0.04
+                        score += 0.12
                     elif age_seconds < 86400:    # < 1 day
-                        score += 0.02
+                        score += 0.06
                     else:
                         # Memory Aging Decay: slow decay over days
                         age_days = age_seconds / 86400.0
@@ -249,3 +285,50 @@ class Retriever:
             logger.warning(f"[RETRIEVE] No results found in '{collection}' for query: '{query[:60]}'")
                 
         return final_results
+
+    def _expand_query(self, query: str) -> list[str]:
+        """Generate supplementary SPO-form queries for better retrieval of normalized facts.
+        
+        E.g., "what is my operating system?" -> ["user operating_system", "user laptop operating_system"]
+        """
+        lowered = query.lower().strip().rstrip("?!.")
+        expanded = []
+        
+        # Strip common question prefixes to extract the core noun phrase
+        prefixes = [
+            "what is my", "what's my", "what are my",
+            "what is the", "what's the",
+            "tell me my", "do you know my",
+            "what do you know about my",
+        ]
+        core = lowered
+        for prefix in prefixes:
+            if lowered.startswith(prefix):
+                core = lowered[len(prefix):].strip()
+                break
+        
+        if core == lowered:
+            # No question prefix matched; not a clear personal query to expand
+            return []
+        
+        # Convert core phrase to underscore-joined predicate form
+        # e.g., "operating system" -> "operating_system"
+        predicate = core.replace(" ", "_")
+        expanded.append(f"user {predicate}")
+        
+        # Also try with common subject qualifiers (laptop, computer, etc.)
+        qualifier_words = {"laptop", "computer", "desktop", "phone", "device", "pc", "machine"}
+        core_words = set(core.split())
+        remaining = core_words - qualifier_words
+        if remaining and remaining != core_words:
+            # There are qualifier words present; also search without them
+            remaining_predicate = "_".join(sorted(remaining))
+            expanded.append(f"user {remaining_predicate}")
+            # And with the qualifier
+            for q in core_words & qualifier_words:
+                expanded.append(f"user {q}_{remaining_predicate}")
+        
+        # Also try "has_" prefixed predicate (common in stored facts)
+        expanded.append(f"user has_{predicate}")
+        
+        return expanded[:3]  # Cap at 3 expansion queries

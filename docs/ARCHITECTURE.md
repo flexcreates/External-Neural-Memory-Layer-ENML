@@ -1,118 +1,129 @@
 # ENML Architecture
 
-This document describes the current runtime architecture after the prompt-template and startup refactors.
+This document describes the current runtime architecture.
 
 ## End-To-End Flow
 
 ```text
-User Input
+User input
   -> Orchestrator
-  -> Profile Update / Memory Extraction
-  -> Query Routing
-  -> Retrieval Policy
-  -> Retriever + Reranking
-  -> Evidence Packet
-  -> Context Builder
-  -> Authority Memory Injection
-  -> Model-Specific Prompt Builder
-  -> llama-server
-  -> Citation Tracking
-  -> Runtime Replay Logging
+  -> Memory extraction / preference capture
+  -> Query router
+  -> Retrieval policy engine
+  -> Vector retrieval + local fallback records
+  -> Evidence packet
+  -> Context builder
+  -> Authority memory injection
+  -> Model-specific prompt template
+  -> llama-server generation
+  -> Citation tracking
+  -> Runtime replay logging
 ```
 
-## Main Components
+## Main Runtime Components
 
 | Component | File | Purpose |
 |---|---|---|
-| Orchestrator | `core/orchestrator.py` | Main runtime pipeline and streaming generation |
-| Memory Manager | `core/memory_manager.py` | Fact storage, retrieval, evidence packet building |
-| Context Builder | `core/context_builder.py` | System prompt grounding, history trimming, answer policy injection |
-| Prompt Templates | `core/prompt_templates.py` | Family-based prompt routing and rendering |
-| Query Router | `core/router/query_router.py` | Routes to knowledge, project, document, or research collections |
-| Distiller | `core/context/distiller.py` | Compresses evidence for models that benefit from it |
-| Authority Memory | `core/memory/authority_memory.py` | Deterministic always-injected identity/profile storage |
-| Citation Tracker | `core/citation_tracker.py` | Evidence usage logging |
-| Runtime Replay | `core/runtime_replay.py` | Structured runtime traces |
+| Orchestrator | `core/orchestrator.py` | Main request pipeline and generation orchestration |
+| Memory Manager | `core/memory_manager.py` | Memory updates, retrieval, local record fallback, authority integration |
+| Memory Extractor | `core/memory/extractor.py` | Multi-layer fact extraction with LLM, rule, and regex passes |
+| Context Builder | `core/context_builder.py` | Builds grounded prompts, trims history, and formats evidence |
+| Prompt Templates | `core/prompt_templates.py` | Renders prompts for the active model family |
+| Query Router | `core/router/query_router.py` | Chooses the primary collection for retrieval |
+| Retrieval Policy | `core/retrieval/policy.py` | Decides grounding strictness and collection mix |
+| Retriever | `core/vector/retriever.py` | Hybrid dense+sparse retrieval plus reranking |
+| Authority Memory | `core/memory/authority_memory.py` | Deterministic profile and preference store |
+| Runtime Replay | `core/runtime_replay.py` | Structured runtime telemetry |
+| Citation Tracker | `core/citation_tracker.py` | Tracks which evidence items were actually cited |
+
+## Memory Layers
+
+### Authority memory
+
+- file-backed JSON profile
+- always injected into direct recall prompts
+- stores user identity, assistant identity, and user preferences
+
+### Local record repository
+
+- JSON memory records managed by the memory subsystem
+- used as a fallback for retrieval and lifecycle services
+
+### Vector memory
+
+Qdrant collections:
+
+- `knowledge_collection`
+- `episodic_collection`
+- `document_collection`
+- `project_collection`
+- `research_collection`
+- `conversation_collection`
+- `profile_collection`
+
+### Session storage
+
+- date-partitioned JSON session files in `memory/conversations/`
+
+## Extraction Path
+
+The extractor is layered:
+
+1. intent and content guards reject questions, commands, and document-like input
+2. direct fact statements are fast-pathed
+3. LLM extraction runs first
+4. rule extraction and regex extraction provide fallback coverage
+5. predicates are normalized before storage
+
+This is why direct profile statements such as `my name is ...` and `my profession is ...` behave more reliably than earlier versions.
+
+## Retrieval Path
+
+Retrieval is not one flat vector search.
+
+The current flow is:
+
+1. query routing picks the narrowest likely collection
+2. retrieval policy decides strictness and primary/secondary collections
+3. authority identity items are added locally
+4. local record items are added locally
+5. vector retrieval is attempted when Qdrant is available
+6. results are grouped into an evidence packet
+7. context builder formats answer rules and evidence blocks
 
 ## Prompt Construction
 
-The prompt flow now has two distinct stages:
+Prompt construction has two stages:
 
-1. `core/context_builder.py`
-   - builds the grounded system block
-   - injects retrieved evidence
-   - injects authority memory
-   - trims conversation history against the token budget
+1. [core/context_builder.py](/home/flex/Projects/enml/core/context_builder.py)
+   Produces the grounded system block, evidence sections, authority sections, and history selection.
 
-2. `core/prompt_templates.py`
-   - detects the active model family
-   - renders the final prompt in the correct model format
+2. [core/prompt_templates.py](/home/flex/Projects/enml/core/prompt_templates.py)
+   Converts normalized messages into the exact family-specific prompt format.
 
-This applies to:
+This same template stack is reused by:
 
 - main chat generation
-- query classification helper
-- context distillation helper
-- episodic summarization helper
+- query classification helper calls
+- document summarization helpers
+- context distillation helpers
 
 ## Active Model Detection
 
-ENML no longer assumes one fixed chat model for all paths.
+ENML does not assume one fixed chat model.
 
-`core/llm_runtime.py` detects the active model from `llama-server` using `/v1/models`, and that result is reused by internal helper calls. This is important because the server may be running Gemma, Qwen, DeepSeek Coder, or another model selected at launch.
-
-## Template Families
-
-Current families:
-
-- `llama3`
-- `mistral`
-- `qwen`
-- `deepseek-coder`
-- `deepseek`
-- `gemma`
-- `phi3`
-- `openchat`
-- `wizardcoder`
-- `smollm3`
-- `generic`
-
-The mapping is filename/model-id based, but it is designed to match the active server model discovered at runtime.
-
-## Retrieval And Grounding
-
-Retrieval is not one flat search.
-
-The system:
-
-- routes the query by intent
-- applies a retrieval policy
-- retrieves evidence
-- reranks and groups evidence into an `EvidencePacket`
-- injects answer-policy text and knowledge blocks into the grounded system prompt
-
-Direct personal-memory questions also receive stricter grounding behavior, especially when evidence is missing.
-
-## Storage Layers
-
-Persistent runtime data:
-
-- `memory/conversations/` for saved sessions
-- `memory/authority/profile.json` for deterministic user/assistant/system state
-- Qdrant collections for semantic retrieval
-- `logs/` for system and evaluation logs
+[core/llm_runtime.py](/home/flex/Projects/enml/core/llm_runtime.py) detects the active server model from `/v1/models`, and the prompt/template layer uses that result to render the correct format.
 
 ## Startup Scripts
 
-Operational scripts:
+- [setup.sh](/home/flex/Projects/enml/setup.sh): bootstraps the environment
+- [run_qdrant.sh](/home/flex/Projects/enml/run_qdrant.sh): starts local Qdrant via Docker
+- [run_server.sh](/home/flex/Projects/enml/run_server.sh): chooses a model, plans context/gpu fit, launches `llama-server`
+- [run_web.sh](/home/flex/Projects/enml/run_web.sh): launches Flask UI and aligns ENML’s model env with the active server model
 
-- `setup.sh` initializes the environment
-- `run_qdrant.sh` starts Qdrant
-- `run_server.sh` starts `llama-server` and exposes the active model alias
-- `run_web.sh` starts the web UI and syncs its model routing to the active server model
+## Current Constraints
 
-## Known Constraints
-
-- prompt routing is family-based, so unusual GGUF conversions can still require special handling
-- model quality depends on the GGUF conversion, quantization, and partial GPU offload
-- some older stored memories may reflect pre-refactor extraction behavior, especially around preference verbs such as `like` vs `love`
+- quality still depends on the GGUF conversion and quantization
+- vector memory depends on Qdrant availability
+- retrieval strictness is stronger for personal/document recall than for general chat
+- partial GPU offload and large context windows change latency characteristics significantly

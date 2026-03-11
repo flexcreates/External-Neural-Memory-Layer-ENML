@@ -256,6 +256,9 @@ class MemoryManager:
                     "confidence": confidence
                 })
                 status = enriched_fact.status
+                # Supersede old Qdrant points with the same subject+predicate
+                # so the retriever's must_not=superseded filter excludes stale facts
+                self._supersede_old_qdrant_facts(subject, predicate, obj)
             
             # Build payload
             namespace = "assistant.identity" if subject == "assistant" else "user.identity" if self._is_user_identity_fact(predicate) else f"{subject}.memory"
@@ -725,3 +728,42 @@ class MemoryManager:
         except Exception as e:
             logger.debug(f"Error checking for existing fact: {e}")
             return None
+
+    def _supersede_old_qdrant_facts(self, subject: str, predicate: str, new_obj: str):
+        """Mark all existing Qdrant points with the same subject+predicate as superseded.
+        
+        This ensures old contradicting facts are excluded by the retriever's
+        must_not=superseded filter, so only the newest value is retrieved.
+        """
+        try:
+            from qdrant_client.http import models as qmodels
+            results = self.retriever.qdrant_manager.client.scroll(
+                collection_name=QDRANT_KNOWLEDGE_COLLECTION,
+                scroll_filter=qmodels.Filter(
+                    must=[
+                        qmodels.FieldCondition(key="subject", match=qmodels.MatchValue(value=subject)),
+                        qmodels.FieldCondition(key="predicate", match=qmodels.MatchValue(value=predicate)),
+                        qmodels.FieldCondition(key="status", match=qmodels.MatchValue(value="active")),
+                    ],
+                    must_not=[
+                        qmodels.FieldCondition(key="object", match=qmodels.MatchValue(value=new_obj)),
+                    ],
+                ),
+                limit=20,
+                with_payload=True,
+            )
+            points_to_supersede = results[0] if results else []
+            if points_to_supersede:
+                point_ids = [p.id for p in points_to_supersede]
+                self.retriever.qdrant_manager.client.set_payload(
+                    collection_name=QDRANT_KNOWLEDGE_COLLECTION,
+                    payload={"status": "superseded"},
+                    points=point_ids,
+                )
+                old_values = [p.payload.get("object", "?") for p in points_to_supersede]
+                logger.info(
+                    f"[SUPERSEDE] Marked {len(point_ids)} old Qdrant points as superseded "
+                    f"for {subject}.{predicate}: {old_values} → {new_obj}"
+                )
+        except Exception as e:
+            logger.warning(f"[SUPERSEDE] Failed to supersede old Qdrant facts for {subject}.{predicate}: {e}")

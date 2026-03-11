@@ -233,6 +233,142 @@ class PromptPipelineModelsTest(unittest.TestCase):
         self.assertNotIn("Your favorite number is 42.", prompt)
         self.assertIn("favorite number 2545", prompt)
 
+    # ── Bug 1: Broad recall queries detected as personal ──
+
+    def test_broad_recall_queries_are_detected_as_personal(self):
+        broad_queries = [
+            "tell me everything you know about me",
+            "what do you know about me?",
+            "summarize what you know about me",
+            "tell me everything",
+            "everything you know",
+            "what do you remember about me?",
+            "what can you tell me about me?",
+        ]
+        for query in broad_queries:
+            with self.subTest(query=query):
+                self.assertTrue(
+                    self.builder._is_personal_query(query),
+                    f"Expected personal query for: '{query}'",
+                )
+
+    def test_broad_recall_queries_drop_chat_history(self):
+        prompt, _ = self.builder.build_context(
+            user_input="tell me everything you know about me",
+            history=[
+                {"role": "user", "content": "what OS do I use?"},
+                {"role": "assistant", "content": "You use Windows 11."},
+            ],
+            model_name="Meta-Llama-3-8B-Instruct.gguf",
+        )
+        self.assertNotIn("You use Windows 11.", prompt)
+        self.assertIn("The user likes Python", prompt)
+
+    # ── Bug 2: Mistral recall prompt has no XML ──
+
+    def test_mistral_recall_prompt_has_no_xml_tags(self):
+        prompt, _ = self.builder.build_context(
+            user_input="what do you know about me?",
+            history=[],
+            model_name="Mistral-7B-Instruct.gguf",
+        )
+        xml_tags = ["<knowledge>", "</knowledge>", "<answer_policy>", "</answer_policy>",
+                     "<conversation_rules>", "</conversation_rules>",
+                     "<retrieved_facts>", "</retrieved_facts>"]
+        for tag in xml_tags:
+            self.assertNotIn(tag, prompt, f"Mistral prompt should not contain {tag}")
+        # Facts should still be present in flattened form
+        self.assertIn("The user likes Python", prompt)
+        self.assertIn("favorite number 2545", prompt)
+
+    # ── Bug 4: Mistral prompt section order (facts before identity) ──
+
+    def test_mistral_recall_prompt_facts_before_identity(self):
+        """For Mistral, memory facts should appear before the identity block."""
+        builder = ContextBuilder(DummyMemoryManagerWithIdentity())
+        prompt, _ = builder.build_context(
+            user_input="what do you know about me?",
+            history=[],
+            model_name="Mistral-7B-Instruct.gguf",
+        )
+        facts_pos = prompt.find("The user likes Python")
+        identity_pos = prompt.find("Assistant name: Jarvis")
+        self.assertGreater(facts_pos, -1, "Facts should be present in prompt")
+        self.assertGreater(identity_pos, -1, "Identity should be present in prompt")
+        self.assertLess(facts_pos, identity_pos, "Facts should appear before identity in Mistral prompt")
+
+    # ── Bug (Round 2): Second-person instruction in recall prompt ──
+
+    def test_recall_prompt_contains_second_person_instruction(self):
+        """The recall prompt must explicitly tell the model to use second person."""
+        builder = ContextBuilder(DummyMemoryManagerWithIdentity())
+        prompt, _ = builder.build_context(
+            user_input="what is my favorite color?",
+            history=[],
+            model_name="Meta-Llama-3-8B-Instruct.gguf",
+        )
+        self.assertIn("second person", prompt.lower(),
+                      "Recall prompt must contain second-person instruction")
+        self.assertIn("You are the assistant", prompt,
+                      "Recall prompt must clarify assistant role")
+
+    def test_identity_block_has_labeled_sections(self):
+        """The identity block must have explicit ASSISTANT and USER labels."""
+        builder = ContextBuilder(DummyMemoryManagerWithIdentity())
+        prompt, _ = builder.build_context(
+            user_input="who am I?",
+            history=[],
+            model_name="Meta-Llama-3-8B-Instruct.gguf",
+        )
+        self.assertIn("ASSISTANT IDENTITY", prompt,
+                      "Identity block must have ASSISTANT IDENTITY label")
+        self.assertIn("USER IDENTITY", prompt,
+                      "Identity block must have USER IDENTITY label")
+
+    # ── Bug 3: Retriever query expansion ──
+
+    def test_retriever_query_expansion(self):
+        from core.vector.retriever import Retriever
+        retriever = Retriever.__new__(Retriever)
+        expanded = retriever._expand_query("what is my operating system?")
+        self.assertTrue(len(expanded) > 0, "Should generate expanded queries")
+        self.assertTrue(any("operating_system" in q for q in expanded),
+                        f"Should contain 'operating_system' variant, got: {expanded}")
+        self.assertTrue(any("user" in q for q in expanded),
+                        f"Should contain 'user' subject, got: {expanded}")
+
+        # Non-personal queries should not expand
+        empty = retriever._expand_query("explain quantum physics")
+        self.assertEqual(empty, [])
+
+
+class DummyAuthorityMemoryWithIdentity:
+    def get_injected_prompt(self, prompt: str, compact: bool = False) -> str:
+        return (
+            prompt
+            + "\n\nASSISTANT IDENTITY:\n- Assistant name: Jarvis"
+            + "\nUSER IDENTITY:\n- User name: Flex"
+            + "\nIdentity rules:"
+            + "\n- Keep assistant identity and user identity separate."
+            + "\n- When recalling user facts, always use second person: say 'Your X is Y', never 'My X is Y'."
+        )
+
+    def load(self):
+        return {"user": {"name": "Flex"}, "assistant": {"name": "Jarvis"}}
+
+
+class DummyMemoryManagerWithIdentity:
+    def __init__(self):
+        self.authority_memory = DummyAuthorityMemoryWithIdentity()
+
+    def retrieve_context(self, user_input, n_results=5, model_profile=None):
+        return {
+            "type": "knowledge_collection",
+            "evidence_packet": DummyPacket(),
+            "policy": DummyPolicy(),
+            "scored_items": [{"score": 0.88, "type": "fact", "text": "The user likes Python"}],
+        }
+
 
 if __name__ == "__main__":
     unittest.main()

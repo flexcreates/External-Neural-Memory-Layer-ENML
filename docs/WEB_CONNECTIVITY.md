@@ -1,49 +1,43 @@
 # ENML Web Connectivity
 
-Current status: ENML is designed to run fully locally. Internet-backed research is not part of the default runtime path.
+ENML is currently offline-first.
 
 ## What Exists Today
 
-- local web UI in `web_server.py`
-- local document ingestion
-- local Qdrant retrieval
-- local `llama-server` generation
+- local `llama-server` integration
+- local Flask web UI
+- manual web ingestion through the research module
+- local document, project, and research retrieval
 
-## What Does Not Exist By Default
+## What Does Not Happen Automatically
 
-- automatic live web search during chat
-- automatic remote retrieval fallback
-- built-in search engine API integration
+- live web search during ordinary chat
+- automatic search engine calls
+- automatic remote retrieval fallback when local evidence is missing
 
-## If You Add Web Research Later
+## Current Web-Related Pieces
 
-Keep these constraints:
+- [web_server.py](/home/flex/Projects/enml/web_server.py): browser chat UI and debug endpoints
+- [run_web.sh](/home/flex/Projects/enml/run_web.sh): startup wrapper for the web UI
+- [research/web_ingestor.py](/home/flex/Projects/enml/research/web_ingestor.py): manual web page fetch/clean/chunk/store path
 
-- local memory must remain the first retrieval layer
-- web results should be explicitly marked as external evidence
-- citations and runtime logs should record when external data was used
-- web failures must degrade cleanly back to local-only behavior
+## If You Add Live Web Retrieval Later
 
-## Suggested Integration Point
+Keep these rules:
 
-If web research is added, the correct place is after retrieval policy resolution and before final context building:
+- local memory remains the first retrieval layer
+- external evidence must be clearly distinguishable from local memory
+- runtime logs and citation logs must record external evidence use
+- failures must degrade cleanly back to local-only behavior
+
+Suggested insertion point:
 
 ```text
-User Query
-  -> Query Router
-  -> Retrieval Policy
-  -> Local Retrieval
-  -> Optional Web Retrieval
-  -> Evidence Packet
-  -> Context Builder
+User query
+  -> Query router
+  -> Retrieval policy
+  -> Local retrieval
+  -> Optional external retrieval
+  -> Evidence packet
+  -> Context builder
 ```
-
-## Operational Note
-
-The current project documentation, setup flow, and runtime scripts assume offline-first operation. If you add internet access later, update:
-
-- `README.md`
-- `docs/USER_GUIDE.md`
-- `docs/DEVELOPMENT.md`
-- `.env.example`
-- any setup or deployment scripts that need API keys or extra packages

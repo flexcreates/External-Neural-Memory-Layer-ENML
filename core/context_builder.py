@@ -6,9 +6,12 @@ from .logger import get_logger
 from .context.distiller import ContextDistiller
 from .context.prompt_budget_manager import PromptBudgetManager
 from .memory.types import EvidencePacket, MemoryType
-from .prompt_templates import build_chat_prompt, get_model_template_info
+from .prompt_templates import build_chat_prompt, get_model_template_info, _strip_xml_from_system
 
 logger = get_logger(__name__)
+
+CLEAN_PROMPT_FAMILIES = {"mistral", "wizardcoder", "deepseek-coder", "deepseek", "openchat", "gemma", "qwen-coder"}
+
 
 class ContextBuilder:
     def __init__(self, memory_manager: MemoryManager):
@@ -174,7 +177,10 @@ class ContextBuilder:
                 "Answer only from verified user memory when relevant.\n"
                 "If multiple facts conflict, prefer the most specific and recent verified fact.\n"
                 "For identity questions, keep user identity and assistant identity separate.\n"
-                "For summary questions like 'what do you know about me', summarize the retrieved user facts clearly."
+                "For summary questions like 'what do you know about me', summarize the retrieved user facts clearly.\n"
+                "CRITICAL: When recalling facts about the user, always answer in second person. "
+                "Say 'Your favorite color is X' not 'My favorite color is X'. "
+                "You are the assistant, not the user. Never answer as if you are the user."
             )
         elif policy_name == "research_memory" or is_general_knowledge_query:
             temperature = 0.35 if is_small_model else 0.45
@@ -205,7 +211,8 @@ class ContextBuilder:
             if policy_name == "personal_memory":
                 factual_recall_rule = (
                     "Treat direct user-stated memories as authoritative unless conflicting evidence is present. "
-                    "Answer in plain declarative sentences without unnecessary qualifiers."
+                    "Answer in plain declarative sentences without unnecessary qualifiers. "
+                    "Always use second person (your, you) when referring to the user's facts."
                 )
                 flattened = self._flatten_evidence_text(evidence_packet, limit=6)
                 if flattened:
@@ -263,8 +270,17 @@ class ContextBuilder:
             compact=is_code_model or is_identity_query,
         )
         logger.debug(f"[INJECT] Authority memory injected into prompt")
+
+        # 4b. Post-assembly XML flattening for clean-prompt model families
+        # This ensures recall-path XML (<knowledge>, <retrieved_facts>, etc.)
+        # is converted to plaintext for models that ignore structured XML.
+        if template_info.family in CLEAN_PROMPT_FAMILIES:
+            effective_system_prompt = _strip_xml_from_system(effective_system_prompt)
+            logger.debug(f"[INJECT] Applied XML→plaintext flattening for {template_info.family} family")
+
         # 5. Append Conversation History (with token budget enforcement)
-        if is_personal_query or is_identity_query:
+        is_broad_recall = self._is_broad_recall_query(user_input)
+        if is_personal_query or is_identity_query or is_broad_recall:
             recent_history = []
         else:
             sliding_window_count = 6 if is_small_model else 12
@@ -337,7 +353,29 @@ class ContextBuilder:
             return True
         if "what do you know about " in lowered and "flex" in lowered:
             return True
+        # Broad aggregation patterns
+        if self._is_broad_recall_query(text):
+            return True
         return False
+
+    def _is_broad_recall_query(self, text: str) -> bool:
+        """Detect broad aggregation queries that should trigger personal-memory recall."""
+        lowered = (text or "").lower().strip()
+        broad_patterns = (
+            "tell me everything",
+            "everything you know",
+            "what do you know",
+            "summarize what you know",
+            "what have you learned",
+            "what do you remember",
+            "what can you tell me",
+            "list everything",
+            "tell me all",
+            "all you know",
+            "recall everything",
+            "show me what you know",
+        )
+        return any(pattern in lowered for pattern in broad_patterns)
 
     def _is_identity_query(self, text: str) -> bool:
         lowered = (text or "").lower().strip()
