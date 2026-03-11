@@ -79,16 +79,6 @@ class Orchestrator:
         # Add user input to history temporarily for context building if needed, 
         # but usually we want to pass the *previous* history + current input.
         
-        # 1. Update Profile Immediately (Real-time Learning)
-        # Pass recent conversation context so the extractor can resolve pronouns
-        # like "its", "that", "this" (e.g., "its David" refers to the pet turtle)
-        if not skip_extraction:
-            extraction_start = time.perf_counter()
-            self.memory_manager.update_profile(user_input, conversation_history=history)
-            extraction_ms = (time.perf_counter() - extraction_start) * 1000
-        else:
-            extraction_ms = 0.0
-
         # 2. Build Context
         # For this implementation, we assume 'history' contains the conversation SO FAR.
         # We append the NEW user message to the context sent to LLM.
@@ -105,6 +95,17 @@ class Orchestrator:
         context_ms = (time.perf_counter() - context_start) * 1000
         temperature = self._tuned_temperature(user_input, model_name, temperature)
         max_tokens = self._response_max_tokens(user_input, model_name)
+
+        # 3. Update Profile AFTER context build so current-turn memories
+        # do not get retrieved into the same response.
+        # Pass recent conversation context so the extractor can resolve pronouns
+        # like "its", "that", "this" (e.g., "its David" refers to the pet turtle)
+        if not skip_extraction:
+            extraction_start = time.perf_counter()
+            self.memory_manager.update_profile(user_input, conversation_history=history)
+            extraction_ms = (time.perf_counter() - extraction_start) * 1000
+        else:
+            extraction_ms = 0.0
         
         # 4. Call LLM
         logger.info(
