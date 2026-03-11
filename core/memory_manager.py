@@ -13,6 +13,7 @@ from .memory.extractor import MemoryExtractor
 from .memory.consolidation_service import MemoryConsolidationService
 from .memory.lifecycle_service import MemoryLifecycleService
 from .memory.record_repository import MemoryRecordRepository
+from .memory.validators import get_validator
 from .memory.types import EvidenceItem, EvidencePacket, MemoryRecord, MemoryType
 from .retrieval import RetrievalPolicyEngine
 from .knowledge_graph import MULTI_VALUE_PREDICATES
@@ -33,6 +34,7 @@ class MemoryManager:
         self.query_router = QueryRouter()
         self.authority_memory = AuthorityMemory()
         self.extractor = MemoryExtractor()
+        self.validator = get_validator()  # NEW: Memory validation layer
         self.feedback = MemoryFeedbackSystem()
         self.record_repository = MemoryRecordRepository()
         self.consolidator = MemoryConsolidationService(self.record_repository)
@@ -185,6 +187,12 @@ class MemoryManager:
         
         facts = self.extractor.extract_facts(user_input=user_interaction, conversation_context=context_str)
         if not facts and self._should_store_semantic_claim(user_interaction):
+            # NEW: Validate semantic claim before storing
+            claim_validation = self.validator.validate(user_interaction, memory_type="semantic_claim")
+            if not claim_validation.should_store:
+                logger.info(f"[MEMORY] Skipped storing semantic claim: {claim_validation.reason}")
+                return
+            
             semantic_record = self._build_semantic_claim_record(user_interaction)
             self._store_memory_record(semantic_record)
             self.retriever.add_memory(
@@ -211,6 +219,12 @@ class MemoryManager:
             confidence = float(fact.get("confidence", 0.0))
             
             if not predicate or not obj:
+                continue
+            
+            # NEW: Validate fact before storing
+            fact_validation = self.validator.validate_fact(subject, predicate, obj)
+            if not fact_validation.should_store:
+                logger.info(f"[MEMORY] Skipped storing fact: {fact_validation.reason}")
                 continue
             
             # ── ROUTE 1: Assistant identity facts → Authority Memory ──

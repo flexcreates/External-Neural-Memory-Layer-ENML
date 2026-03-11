@@ -98,6 +98,44 @@ python3 chat.py --eval-runtime
 python3 chat.py --eval-citations
 ```
 
+## Memory Security & Validation
+
+ENML includes built-in protections to maintain memory quality:
+
+### What ENML Doesn't Store
+
+ENML automatically filters out:
+
+- Conversational greetings ("hi jarvis how are you")
+- Questions and commands
+- Prompt injection attempts
+- Very short or noisy content
+
+### Hallucination Guard
+
+When you ask about the AI itself (training, origin, capabilities), ENML uses a guard to prevent hallucination:
+
+```
+How were you trained?  ->  "I am running locally using Meta Llama 3 8B with ENML memory."
+What model are you?    ->  "I run on Meta Llama 3 8B."
+Who created you?       ->  "Flex is my creator."
+```
+
+### Memory Garbage Collection
+
+Old or superseded memories are automatically cleaned up. To manually trigger cleanup:
+
+```python
+from core.memory.garbage_collector import get_garbage_collector
+gc = get_garbage_collector()
+
+# Dry run to see what would be deleted
+stats = gc.run_cleanup(dry_run=True)
+
+# Actually delete
+stats = gc.run_cleanup(dry_run=False)
+```
+
 ## Useful Commands During Chat
 
 - `exit`

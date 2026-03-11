@@ -5,12 +5,15 @@ ENML is a local memory layer for local LLMs. It wraps `llama-server`, Qdrant, de
 ## What The System Does Now
 
 - extracts user facts, preferences, and profile updates from conversation
+- validates memories before storage (blocks noise and injection)
 - stores deterministic identity facts in `memory/authority/profile.json`
 - stores local memory records even when Qdrant is unavailable
 - uses hybrid dense+sparse retrieval with reranking when Qdrant is up
 - builds grounded prompts differently for each model family
 - exposes both a CLI (`chat.py`) and a Flask web UI (`web_server.py`)
 - logs runtime replay and citation metrics for later evaluation
+- prevents hallucination on self-referential questions
+- includes garbage collection for old memories
 
 ## Runtime Stack
 
@@ -119,10 +122,13 @@ High-level flow:
 User input
   -> Orchestrator
   -> Memory extraction / preference capture
+  -> Memory validation (blocks noise/injection)
   -> Query routing
   -> Retrieval policy selection
+  -> Hallucination guard (for self-reference)
   -> Vector retrieval + local fallback
   -> Context building
+  -> Authority memory injection
   -> Model-specific prompt rendering
   -> llama-server generation
   -> Citation tracking / runtime replay
@@ -136,6 +142,9 @@ Important runtime files:
 - [core/prompt_templates.py](/home/flex/Projects/enml/core/prompt_templates.py)
 - [core/router/query_router.py](/home/flex/Projects/enml/core/router/query_router.py)
 - [core/vector/retriever.py](/home/flex/Projects/enml/core/vector/retriever.py)
+- [core/memory/validators.py](/home/flex/Projects/enml/core/memory/validators.py) (memory validation)
+- [core/hallucination_guard.py](/home/flex/Projects/enml/core/hallucination_guard.py) (hallucination prevention)
+- [core/memory/garbage_collector.py](/home/flex/Projects/enml/core/memory/garbage_collector.py) (cleanup)
 
 ## Model Families
 

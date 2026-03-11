@@ -7,6 +7,7 @@ from .context.distiller import ContextDistiller
 from .context.prompt_budget_manager import PromptBudgetManager
 from .memory.types import EvidencePacket, MemoryType
 from .prompt_templates import build_chat_prompt, get_model_template_info, _strip_xml_from_system
+from .hallucination_guard import get_hallucination_guard
 
 logger = get_logger(__name__)
 
@@ -17,6 +18,7 @@ class ContextBuilder:
     def __init__(self, memory_manager: MemoryManager):
         self.memory_manager = memory_manager
         self.distiller = ContextDistiller()
+        self.hallucination_guard = get_hallucination_guard()  # NEW: Hallucination guard
         self.last_evidence_packet: Optional[EvidencePacket] = None
         self.last_retrieval_policy = None
         
@@ -101,6 +103,14 @@ class ContextBuilder:
         
         temperature = 0.6
         effective_system_prompt = system_prompt
+        
+        # NEW: Apply hallucination guard for self-referential questions
+        effective_system_prompt, guard_injected = self.hallucination_guard.inject_guard_into_prompt(
+            effective_system_prompt, user_input, model_name
+        )
+        if guard_injected:
+            logger.info("[GUARD] Hallucination guard injected for self-referential query")
+        
         has_local_evidence = bool(docs)
         is_general_knowledge_query = self._is_general_knowledge_query(user_input)
         append_structured_memory = not is_code_model

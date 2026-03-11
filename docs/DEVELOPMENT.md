@@ -26,6 +26,9 @@ Changes in these files usually require documentation, tests, and runtime verific
 - `core/context_builder.py`
 - `core/memory_manager.py`
 - `core/memory/extractor.py`
+- `core/memory/validators.py` (NEW)
+- `core/hallucination_guard.py` (NEW)
+- `core/memory/garbage_collector.py` (NEW)
 - `core/vector/retriever.py`
 - `core/router/query_router.py`
 - `run_server.sh`
@@ -73,6 +76,9 @@ Current memory behavior depends on all of these layers:
 - Qdrant vector memory
 - retrieval policies
 - evidence packet formatting
+- **memory validators** (NEW - prevents noise/injection)
+- **hallucination guard** (NEW - prevents self-hallucination)
+- **garbage collector** (NEW - cleanup)
 
 If you change extraction or memory storage rules, verify:
 
@@ -81,6 +87,8 @@ If you change extraction or memory storage rules, verify:
 - degraded mode with Qdrant down
 - personal recall questions
 - ordinary conversation that should not trigger strict grounding
+- validation is blocking conversational noise
+- hallucination guard is triggering on self-reference queries
 
 ## Useful Checks
 

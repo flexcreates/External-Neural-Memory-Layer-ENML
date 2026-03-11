@@ -8,11 +8,13 @@ This document describes the current runtime architecture.
 User input
   -> Orchestrator
   -> Memory extraction / preference capture
+  -> Memory validation (validators.py)
   -> Query router
   -> Retrieval policy engine
   -> Vector retrieval + local fallback records
   -> Evidence packet
   -> Context builder
+  -> Hallucination guard (self-reference queries)
   -> Authority memory injection
   -> Model-specific prompt template
   -> llama-server generation
@@ -27,7 +29,10 @@ User input
 | Orchestrator | `core/orchestrator.py` | Main request pipeline and generation orchestration |
 | Memory Manager | `core/memory_manager.py` | Memory updates, retrieval, local record fallback, authority integration |
 | Memory Extractor | `core/memory/extractor.py` | Multi-layer fact extraction with LLM, rule, and regex passes |
+| Memory Validator | `core/memory/validators.py` | Validates facts before storage, blocks noise and injection |
+| Memory Garbage Collector | `core/memory/garbage_collector.py` | Periodic cleanup of deprecated memories |
 | Context Builder | `core/context_builder.py` | Builds grounded prompts, trims history, and formats evidence |
+| Hallucination Guard | `core/hallucination_guard.py` | Prevents hallucination on self-referential questions |
 | Prompt Templates | `core/prompt_templates.py` | Renders prompts for the active model family |
 | Query Router | `core/router/query_router.py` | Chooses the primary collection for retrieval |
 | Retrieval Policy | `core/retrieval/policy.py` | Decides grounding strictness and collection mix |
@@ -127,3 +132,45 @@ ENML does not assume one fixed chat model.
 - vector memory depends on Qdrant availability
 - retrieval strictness is stronger for personal/document recall than for general chat
 - partial GPU offload and large context windows change latency characteristics significantly
+
+## Security & Validation
+
+### Memory Validation Layer (`core/memory/validators.py`)
+
+The memory validator prevents low-quality or malicious content from being stored:
+
+- **Conversational Noise Filter**: Blocks greetings like "hi jarvis how are you buddy"
+- **Prompt Injection Detection**: Blocks attempts to store malicious commands
+- **Content Length Checks**: Rejects too-short or too-long content
+- **Semantic Claim Validation**: Ensures claims aren't questions or commands
+
+### Hallucination Guard (`core/hallucination_guard.py`)
+
+Prevents the model from hallucinating about itself:
+
+- **Self-Reference Detection**: Detects questions about training, origin, capabilities
+- **Forced Factual Answers**: Injects system context for factual responses
+- **Training Data Guard**: Blocks claims about web scraping or crowdsourcing
+
+Example questions that trigger the guard:
+- "How were you trained?"
+- "What model are you?"
+- "Who created you?"
+- "Do you have internet access?"
+
+### Memory Garbage Collector (`core/memory/garbage_collector.py`)
+
+Periodic cleanup of memory stores:
+
+- **Superseded Memory Cleanup**: Removes old versions of facts
+- **Age-Based Cleanup**: Removes memories older than 90 days
+- **Low-Confidence Cleanup**: Removes memories below 0.3 confidence
+- **Session Cleanup**: Manages old conversation sessions
+
+Run garbage collection periodically:
+
+```python
+from core.memory.garbage_collector import get_garbage_collector
+gc = get_garbage_collector()
+stats = gc.run_cleanup(dry_run=False)  # Actually delete
+```
