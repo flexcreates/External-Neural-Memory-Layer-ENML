@@ -181,16 +181,15 @@ class ContextBuilder:
                 f"Context:\n{context_str}"
             )
         elif policy_name == "personal_memory" or (is_personal_query and has_local_evidence):
-            temperature = 0.2
+            temperature = 0.1
             effective_system_prompt = (
-                "You are a personal memory recall assistant.\n"
-                "Answer only from verified user memory when relevant.\n"
-                "If multiple facts conflict, prefer the most specific and recent verified fact.\n"
-                "For identity questions, keep user identity and assistant identity separate.\n"
-                "For summary questions like 'what do you know about me', summarize the retrieved user facts clearly.\n"
-                "CRITICAL: When recalling facts about the user, always answer in second person. "
-                "Say 'Your favorite color is X' not 'My favorite color is X'. "
-                "You are the assistant, not the user. Never answer as if you are the user."
+                "You are a memory recall assistant.\n"
+                "Your ONLY job is to read the verified knowledge block below and state facts from it.\n"
+                "Do not answer from general knowledge.\n"
+                "If a fact is not in the knowledge block, say 'I do not have that in my memory.'\n"
+                "CRITICAL: When the user asks 'who am I' or 'what is my name', look for a fact like 'User name is X'.\n"
+                "Always answer in the second person: 'Your name is X', 'Your favorite color is Y'.\n"
+                "Never say 'My name is X' when reciting user facts."
             )
         elif policy_name == "research_memory" or is_general_knowledge_query:
             temperature = 0.35 if is_small_model else 0.45
@@ -273,6 +272,23 @@ class ContextBuilder:
         elif is_code_model:
             logger.info("[INJECT] Skipping structured memory XML for code-specialist model")
             
+        # 3.5 Guarded Coding Context Injection
+        try:
+            from .router.pipeline_router import PipelineRouter, PipelineMode
+            from .coding.memory import CodingMemory
+
+            is_coder_mode = PipelineRouter.classify(user_input) == PipelineMode.CODER
+            coding_memory = CodingMemory()
+            active_task = coding_memory.get_active_task()
+            
+            if is_coder_mode or active_task:
+                coding_injection = coding_memory.get_prompt_injection(user_input)
+                if coding_injection:
+                    logger.debug("[INJECT-HOOK] Injecting coding context into prompt")
+                    effective_system_prompt += f"\n\n{coding_injection}"
+        except Exception as e:
+            logger.warning(f"[ContextBuilder] Failed to inject coding context: {e}")
+
         # 4. Authority Identity Module Injection (Absolute Highest Priority)
         # This injects the permanent AI/User identity.json strings BEFORE the history.
         effective_system_prompt = self.memory_manager.authority_memory.get_injected_prompt(

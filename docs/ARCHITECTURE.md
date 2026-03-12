@@ -27,6 +27,9 @@ User input
 | Component | File | Purpose |
 |---|---|---|
 | Orchestrator | `core/orchestrator.py` | Main request pipeline and generation orchestration |
+| Pipeline Router | `core/router/pipeline_router.py` | Routes queries to general, coder, or mid pipelines |
+| Model Registry | `core/model_registry.py` | Tracks model tier, family, settings, and capabilities |
+| Coding Memory | `core/coding/memory.py` | Task and code context pipeline for code generation requests |
 | Memory Manager | `core/memory_manager.py` | Memory updates, retrieval, local record fallback, authority integration |
 | Memory Extractor | `core/memory/extractor.py` | Multi-layer fact extraction with LLM, rule, and regex passes |
 | Memory Validator | `core/memory/validators.py` | Validates facts before storage, blocks noise and injection |
@@ -65,6 +68,8 @@ Qdrant collections:
 - `research_collection`
 - `conversation_collection`
 - `profile_collection`
+- `code_tasks`
+- `code_context`
 
 ### Session storage
 

@@ -103,6 +103,8 @@ dirs=(
     "$MEMORY_ROOT/research"
     "$MEMORY_ROOT/authority"
     "$MEMORY_ROOT/graph"
+    "$MEMORY_ROOT/coding"
+    "$MEMORY_ROOT/coding/tasks"
     "$SCRIPT_DIR/logs"
     "$SCRIPT_DIR/qdrant_storage"
     "$SCRIPT_DIR/graph"

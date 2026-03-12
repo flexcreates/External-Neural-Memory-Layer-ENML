@@ -97,10 +97,12 @@ def build_chat_prompt_from_messages(
         "deepseek_chatml": _build_qwen_prompt,
         "deepseek": _build_deepseek_prompt,
         "phi3": _build_phi3_prompt,
+        "phi-3": _build_phi3_prompt,
         "openchat": _build_openchat_prompt,
         "gemma": _build_gemma_prompt,
         "wizardcoder": _build_wizardcoder_prompt,
         "smollm3": _build_smollm3_prompt,
+        "smollm": _build_smollm3_prompt,
         "generic": _build_generic_prompt,
     }
     return builders[template_name](messages)
@@ -303,80 +305,38 @@ def _build_gemma_prompt(messages: List[Message]) -> str:
 
 def _build_wizardcoder_prompt(messages: List[Message]) -> str:
     """
-    WizardCoder only gets the current task plus short clean context.
+    WizardCoder gets ChatML render now to preserve conversation context.
     """
     system_prompt, turns = _split_system_and_turns(messages)
-
-    current_request = ""
-    history_pairs: List[str] = []
-    is_code_task = False
-
-    for index, turn in enumerate(turns):
-        if turn["role"] == "user" and index == len(turns) - 1:
-            current_request = turn["content"].strip()
-            is_code_task = _is_code_like_text(current_request)
-        elif turn["role"] == "user":
-            history_pairs.append(f"User: {turn['content'].strip()}")
-        elif turn["role"] == "assistant":
-            history_pairs.append(f"Assistant: {turn['content'].strip()}")
-
     clean_system = _strip_xml_from_system(system_prompt)
-    concise_system = _truncate_words(clean_system, 100)
-
-    instruction_parts: List[str] = []
-    if concise_system:
-        instruction_parts.append(concise_system)
-        instruction_parts.append("")
-
-    if history_pairs and is_code_task:
-        recent = history_pairs[-6:]
-        instruction_parts.append("Previous conversation:")
-        instruction_parts.extend(recent)
-        instruction_parts.append("")
-
-    instruction_parts.append(current_request)
-    instruction = "\n".join(instruction_parts).strip()
-
-    return (
-        "Below is an instruction that describes a task. "
-        "Write a response that appropriately completes the request.\n\n"
-        "### Instruction:\n"
-        f"{instruction}\n\n"
-        "### Response:\n"
-    )
+    
+    new_messages = []
+    if clean_system:
+        new_messages.append({"role": "system", "content": clean_system})
+    new_messages.extend(turns)
+    
+    return _build_qwen_prompt(new_messages)
 
 
 def _build_smollm3_prompt(messages: List[Message]) -> str:
     """
-    SmolLM3 format with dynamic thinking mode.
+    SmolLM format delegates to ChatML render.
     """
+    return _build_qwen_prompt(messages)
+
+def _build_code_aware_prompt(messages: List[Message], code_context: Optional[str] = None) -> str:
+    if not code_context:
+        return _build_qwen_prompt(messages)
+        
     system_prompt, turns = _split_system_and_turns(messages)
-    system_block = system_prompt.strip()
-
-    if "/think" in system_block or "/no_think" in system_block:
-        pass
+    
+    if system_prompt:
+        new_system = f"{system_prompt.strip()}\n\n{code_context.strip()}"
     else:
-        think_directive = "/think" if _smollm3_is_complex_query(turns) else "/no_think"
-        system_block = f"{think_directive}\n{system_block}".strip()
-
-    if not system_block:
-        system_block = "/no_think\nYou are a helpful AI assistant."
-
-    prompt_parts = [
-        "<|im_start|>system\n",
-        system_block,
-        "\n<|im_end|>\n",
-    ]
-    for turn in turns:
-        prompt_parts.extend(
-            [
-                f"<|im_start|>{turn['role']}\n",
-                turn["content"],
-                "\n<|im_end|>\n",
-            ]
-        )
-    prompt_parts.append("<|im_start|>assistant\n")
-    return "".join(prompt_parts)
+        new_system = code_context.strip()
+        
+    new_messages = [{"role": "system", "content": new_system}] + turns
+    return _build_qwen_prompt(new_messages)
 
 
 def _build_generic_prompt(messages: List[Message]) -> str:

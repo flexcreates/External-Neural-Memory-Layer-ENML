@@ -150,6 +150,39 @@ raise SystemExit(1)
 PY
 }
 
+get_model_tier() {
+    local filename="$1"
+    case "${filename,,}" in
+        *deepseek-coder*|*qwen*-coder*|*wizardcoder*) echo "CODER" ;;
+        *gemma*|*llama*|*mistral*|*openchat*|*qwen2.5-7b-instust*) echo "GENERAL" ;;
+        *phi*|*smollm*|*qwen2.5-3b*) echo "MID" ;;
+        *) echo "UNKNOWN" ;;
+    esac
+}
+
+get_model_family() {
+    local filename="$1"
+    case "${filename,,}" in
+        *llama-3*) echo "LLAMA3" ;;
+        *mistral*) echo "MISTRAL" ;;
+        *gemma*) echo "GEMMA" ;;
+        *phi*) echo "PHI3" ;;
+        *deepseek-coder*|*qwen*|*wizardcoder*|*openchat*|*smollm*) echo "CHATML" ;;
+        *) echo "UNKNOWN" ;;
+    esac
+}
+
+get_model_capabilities() {
+    local filename="$1"
+    case "${filename,,}" in
+        *deepseek-coder*|*qwen*-coder*) echo "CODE_GENERATION, GENERAL_REASONING" ;;
+        *wizardcoder*) echo "CODE_GENERATION" ;;
+        *phi*|*smollm*|*qwen*-3b*) echo "FAST_INFERENCE" ;;
+        *gemma*|*llama*|*mistral*|*openchat*|*qwen2.5-7b-instust*) echo "GENERAL_REASONING" ;;
+        *) echo "UNKNOWN" ;;
+    esac
+}
+
 fit_candidate_context() {
     local candidate_context="$1"
     local planner_output planner_line fitted_context fitted_layers
@@ -255,6 +288,15 @@ if [ ! -d "$MODELS_DIR" ]; then
 fi
 
 echo "Scanning for models in $MODELS_DIR..."
+
+echo "── CODER TIER ──"
+find "$MODELS_DIR/coder" -type f -name "*.gguf" 2>/dev/null | sort -f | sed "s|^$MODELS_DIR/||" || true
+echo "── GENERAL TIER ──"
+find "$MODELS_DIR/general" "$MODELS_DIR/qwen" -type f -name "*.gguf" 2>/dev/null | sort -f | sed "s|^$MODELS_DIR/||" || true
+echo "── MID TIER ──"
+find "$MODELS_DIR/mid" -type f -name "*.gguf" 2>/dev/null | sort -f | sed "s|^$MODELS_DIR/||" || true
+echo ""
+
 mapfile -t models < <(find "$MODELS_DIR" -type f -name "*.gguf" | sort -f)
 
 if [ ${#models[@]} -eq 0 ]; then
@@ -320,6 +362,10 @@ echo "║              ENML — Llama.cpp Server                      ║"
 echo "╚════════════════════════════════════════════════════════════╝"
 echo "  Model:     ${MODEL_BASENAME}"
 echo "  Alias:     ${MODEL_ALIAS}"
+echo "  Tier:      $(get_model_tier "$MODEL_BASENAME")"
+echo "  Family:    $(get_model_family "$MODEL_BASENAME")"
+echo "  Pipeline:  $(get_model_tier "$MODEL_BASENAME")"
+echo "  Caps:      $(get_model_capabilities "$MODEL_BASENAME")"
 echo "  Template:  ${MODEL_TEMPLATE_INFO}"
 echo "  URL:       http://localhost:$PORT"
 if [ "$USE_PLANNED_PROFILE" -eq 1 ]; then

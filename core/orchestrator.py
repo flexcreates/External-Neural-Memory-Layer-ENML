@@ -83,6 +83,16 @@ class Orchestrator:
         # For this implementation, we assume 'history' contains the conversation SO FAR.
         # We append the NEW user message to the context sent to LLM.
         model_name = self.model_router.route(user_input)
+        
+        from .router.pipeline_router import PipelineRouter, PipelineMode
+        pipeline_mode = PipelineMode.GENERAL.value
+        try:
+            pipeline_mode = PipelineRouter.classify(user_input).value
+        except Exception as e:
+            logger.warning(f"[Orchestrator] Pipeline classification failed, defaulting to GENERAL: {e}")
+            
+        logger.info(f"[PIPELINE] Mode: {pipeline_mode} | Model: {model_name}")
+        
         model_profile = self.model_router.get_profile(model_name)
         context_start = time.perf_counter()
         prompt_text, temperature = self.context_builder.build_context(
@@ -133,6 +143,41 @@ class Orchestrator:
                 if content:
                     yield content
                     full_response += content
+
+            if pipeline_mode == "CODER":
+                try:
+                    logger.debug(f"[CODING-HOOK] Post-generation hook firing. mode={pipeline_mode}")
+                    from .coding.memory import CodingMemory
+                    _cm = CodingMemory()
+                    
+                    # Auto-capture new task if detected
+                    _parsed_task = _cm.parse_task_from_input(user_input)
+                    if _parsed_task:
+                        logger.debug(f"[CODING] Auto-captured task: {_parsed_task.title}")
+                    
+                    # Advance step if user signals completion
+                    _step_signals = [
+                        "finished", "completed", "done with", "moving on",
+                        "next step", "moving to", "that's done", "step done",
+                        "onto the next", "wrapped up", "all done"
+                    ]
+                    _input_lower = user_input.lower()
+                    if any(signal in _input_lower for signal in _step_signals):
+                        _active = _cm.get_active_task()
+                        if _active:
+                            _cm.task_store.advance_step(_active.task_id)
+                            logger.info(f"[CODING] Step advanced for task: {_active.title}")
+                except Exception as e:
+                    logger.warning(f"[Orchestrator] Failed to auto-parse coding task: {e}")
+            elif pipeline_mode == "GENERAL":
+                try:
+                    from .coding.memory import CodingMemory
+                    if CodingMemory().parse_task_from_input(user_input, record=False):
+                        note = "\n\nNote: A coding-focused model (CODER tier) would handle this more precisely.\nSwitch models via run_server.sh to enable the full coding pipeline."
+                        yield note
+                        full_response += note
+                except Exception as e:
+                    logger.warning(f"[Orchestrator] Failed to append coding notice: {e}")
 
             evidence_packet = self.context_builder.last_evidence_packet
             llm_ms = (time.perf_counter() - llm_start) * 1000

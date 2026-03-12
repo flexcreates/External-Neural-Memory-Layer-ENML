@@ -90,6 +90,22 @@ Resume one with:
 python3 chat.py --session session_20260311_143847
 ```
 
+## Coding Agent Mode
+
+ENML now supports a specialized Coding Agent Mode. When a coding model (e.g., DeepSeek Coder, WizardCoder) is selected at launch, the pipeline automatically shifts to `CODER` mode. 
+
+**Model Selection:**
+During `./run_server.sh` startup, models are grouped by tier:
+- `CODER TIER`: Specialized code generation models (all use ChatML format)
+- `GENERAL TIER`: Broad reasoning models (Llama 3, Mistral, Gemma)
+- `MID TIER`: Smaller, faster models (Phi-3, SmolLM)
+
+**The Startup Banner:**
+The server banner will display the Model Tier, Prompt Family, Pipeline Mode, and specific Capabilities (e.g., `CODE_GENERATION`) initialized for your session.
+
+**Coding Tasks:**
+When in `CODER` mode, if you ask the agent to "implement", "refactor", or "fix the bug", ENML will automatically parse and record a Coding Task. This task persistently tracks your step-by-step implementation plan, the files involved, and current progress. The context of this active task is automatically injected into every prompt until the task completes.
+
 ## Useful CLI Flags
 
 ```bash

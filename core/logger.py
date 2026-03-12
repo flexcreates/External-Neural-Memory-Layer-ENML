@@ -112,7 +112,7 @@ class _LoggerConfigurator:
 
 class _PipelineFilter(logging.Filter):
     """Only passes log records that contain a pipeline stage marker."""
-    _STAGES = ("[ROUTE]", "[RETRIEVE]", "[INJECT]", "[PROMPT]", "[LLM]", "[EXTRACT]", "[STORE]")
+    _STAGES = ("[PIPELINE]", "[ROUTE]", "[RETRIEVE]", "[INJECT]", "[PROMPT]", "[LLM]", "[EXTRACT]", "[STORE]", "[CODING]", "[TASK]")
     
     def filter(self, record):
         msg = record.getMessage()

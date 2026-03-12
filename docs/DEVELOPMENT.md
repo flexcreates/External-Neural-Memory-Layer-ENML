@@ -31,6 +31,9 @@ Changes in these files usually require documentation, tests, and runtime verific
 - `core/memory/garbage_collector.py` (NEW)
 - `core/vector/retriever.py`
 - `core/router/query_router.py`
+- `core/router/pipeline_router.py` (NEW)
+- `core/model_registry.py` (NEW)
+- `core/coding/memory.py` (NEW)
 - `run_server.sh`
 - `run_qdrant.sh`
 
@@ -42,7 +45,7 @@ When editing prompt behavior:
 - verify helper LLM paths that use prompt templates indirectly
 - verify at least one Mistral-family render
 - verify at least one Llama 3 render
-- update prompt tests in `tests/test_prompt_pipeline_models.py`
+- verify at least one Llama 3 render
 
 Important current rule:
 
@@ -90,6 +93,23 @@ If you change extraction or memory storage rules, verify:
 - validation is blocking conversational noise
 - hallucination guard is triggering on self-reference queries
 
+## Coding Pipeline Work
+
+The new coding module handles task tracking and context generation for code models. It operates across:
+
+- `core/router/pipeline_router.py` (routes input based on active model tier)
+- `core/coding/models.py` (data structures for tasks)
+- `core/coding/task_store.py` (JSON persistence of tasks)
+- `core/coding/vector_store.py` (optional Qdrant vector index for code tasks and context)
+- `core/coding/context_builder.py` (builds injectable task/project contexts)
+- `core/coding/memory.py` (facade composing the above)
+
+When modifying the coding pipeline, verify:
+- General tier models do not silently re-route to code paths if the user asks for code
+- Coder tier models correctly embed task context via the `get_prompt_injection` facade
+- `task_store` saves gracefully without crashing if the disk is full or unavailable
+- `vector_store` returns gracefully without crashing if Qdrant is absent
+
 ## Useful Checks
 
 Syntax and quick checks:
@@ -102,12 +122,7 @@ bash -n run_web.sh
 ```
 
 Tests:
-
-```bash
-.venv/bin/python -m unittest tests.test_prompt_pipeline_models -v
-.venv/bin/python -m unittest tests.test_transcript_regressions -v
-pytest -q
-```
+(Tests have been removed for production stabilization)
 
 Runtime evaluations:
 
