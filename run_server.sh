@@ -163,6 +163,8 @@ get_model_tier() {
 get_model_family() {
     local filename="$1"
     case "${filename,,}" in
+        *hermes*) echo "CHATML" ;;
+        *starling*) echo "OPENCHAT" ;;
         *llama-3*) echo "LLAMA3" ;;
         *mistral*) echo "MISTRAL" ;;
         *gemma*) echo "GEMMA" ;;

@@ -31,6 +31,12 @@ def get_model_template_info(model_name: str) -> TemplateInfo:
     if "openchat" in normalized:
         template = "openchat"
         family = "openchat"
+    elif "starling" in normalized:
+        template = "openchat"
+        family = "starling"
+    elif "hermes" in normalized:
+        template = "chatml"
+        family = "hermes"
     elif "llama-3" in normalized or "llama 3" in normalized:
         template = "llama3"
         family = "llama3"
@@ -95,6 +101,7 @@ def build_chat_prompt_from_messages(
         "mistral": _build_mistral_prompt,
         "qwen": _build_qwen_prompt,
         "deepseek_chatml": _build_qwen_prompt,
+        "chatml": _build_qwen_prompt,
         "deepseek": _build_deepseek_prompt,
         "phi3": _build_phi3_prompt,
         "phi-3": _build_phi3_prompt,
@@ -115,6 +122,7 @@ def get_stop_sequences_for_model(model_name: str) -> Optional[List[str]]:
         "mistral": ["</s>", "[INST]"],
         "qwen": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
         "deepseek_chatml": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
+        "chatml": ["<|im_end|>", "<|im_start|>user", "<|im_start|>system"],
         "deepseek": ["<|EOT|>", "### Instruction:"],
         "phi3": ["<|end|>", "<|user|>", "<|system|>"],
         "openchat": ["<|end_of_turn|>", "GPT4 Correct User:"],

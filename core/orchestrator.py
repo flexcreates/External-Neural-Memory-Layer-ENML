@@ -26,18 +26,33 @@ class Orchestrator:
         self.citation_tracker = CitationTracker()
         self.runtime_replay_logger = RuntimeReplayLogger()
 
-    def _response_max_tokens(self, user_input: str, model_name: str) -> int:
+    def _get_max_tokens(self, user_input: str, pipeline_mode: str) -> int:
         text = (user_input or "").lower().strip()
-        word_count = len(text.split())
-        if word_count <= 8 and any(token in text for token in ["my ", "name", "age", "color", "weight", "pet", "who am i"]):
-            return 96
-        if word_count <= 10 and any(token in text for token in ["hi", "hello", "hey", "how are you"]):
-            return 64
-        if any(token in text for token in ["code", "python", "rust", "bug", "stack trace", "function", "class", "script"]):
-            return 320 if "deepseek-coder" in model_name.lower() else 400
-        if any(token in text for token in ["derive", "explain", "solve", "compare", "architecture", "tradeoff"]):
-            return 400
-        return 180
+
+        # Recall queries — keep short
+        recall_signals = ["what is my", "what's my", "do you know my", "who am i"]
+        if any(s in text for s in recall_signals):
+            return 256
+
+        # Code generation — coder pipeline
+        if pipeline_mode == "CODER":
+            return 1500
+
+        # Long explanation requests
+        explanation_signals = [
+            "explain", "describe", "tell me about", "how does",
+            "what is", "why does", "summarize", "give me a",
+            "break down", "walk me through", "in detail", "in depth"
+        ]
+        if any(s in text for s in explanation_signals):
+            return 1024
+
+        # Document / large paste
+        if len(user_input) > 500:
+            return 2048
+
+        # Default conversation
+        return 512
 
     def _tuned_temperature(self, user_input: str, model_name: str, base_temperature: float) -> float:
         text = (user_input or "").lower()
@@ -104,7 +119,9 @@ class Orchestrator:
         )
         context_ms = (time.perf_counter() - context_start) * 1000
         temperature = self._tuned_temperature(user_input, model_name, temperature)
-        max_tokens = self._response_max_tokens(user_input, model_name)
+        max_tokens = self._get_max_tokens(user_input, pipeline_mode)
+        if pipeline_mode == "MID":
+            max_tokens = min(max_tokens, 512)
 
         # 3. Update Profile AFTER context build so current-turn memories
         # do not get retrieved into the same response.
