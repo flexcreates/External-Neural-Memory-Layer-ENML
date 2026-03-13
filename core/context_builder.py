@@ -22,13 +22,25 @@ class ContextBuilder:
         self.last_evidence_packet: Optional[EvidencePacket] = None
         self.last_retrieval_policy = None
         
+        # Greeting patterns for memory injection guard
+        self.GREETING_PATTERNS = [
+            "hi ", "hello", "hey ", "good morning", "good evening",
+            "how are you", "what's up", "sup ", "morning jarvis",
+            "hi jarvis", "hello jarvis", "hey jarvis"
+        ]
+    
+    def _is_greeting(self, user_input: str) -> bool:
+        """Check if user input is a greeting to avoid memory contamination."""
+        text = user_input.lower().strip()
+        return any(text.startswith(p) or p in text for p in self.GREETING_PATTERNS)
+        
     def build_context(self, 
-                      user_input: str, 
-                      history: List[Dict[str, str]], 
-                      system_prompt: str = "You are a persistent AI assistant named Jarvis.",
-                      max_context_tokens: int = 3000,
-                      model_profile = None,
-                      model_name: str = "") -> Tuple[str, float]:
+                       user_input: str, 
+                       history: List[Dict[str, str]], 
+                       system_prompt: str = "You are a persistent AI assistant named Jarvis.",
+                       max_context_tokens: int = 3000,
+                       model_profile = None,
+                       model_name: str = "") -> Tuple[str, float]:
         """
         Builds the grounded prompt string and returns it with temperature.
         """
@@ -41,8 +53,56 @@ class ContextBuilder:
         code_model_families = {"wizardcoder", "deepseek-coder", "qwen-coder"}
         is_code_model = template_info.family in code_model_families
         is_code_task = self._is_code_task(user_input)
+         
+        # Broad recall signals for multi-query expansion
+        BROAD_RECALL_SIGNALS = [
+            "tell me all", "tell me everything", "what do you know about",
+            "all about my", "everything about me", "summarize what you know",
+            "what do you know about me", "all my", "my full"
+        ]
+         
+        def _is_broad_recall(text: str) -> bool:
+            text_lower = text.lower()
+            return any(signal in text_lower for signal in BROAD_RECALL_SIGNALS)
+         
+        # Handle broad recall queries with multi-query expansion
+        if _is_broad_recall(user_input):
+            # For broad recall, run multiple targeted sub-queries and merge results
+            sub_queries = [
+                "user physical appearance weight height body",
+                "user personality traits preferences hobbies",
+                "user identity name age profession",
+                "user possessions laptop specs equipment",
+                "user preferences favorite color food music",
+            ]
+            all_scored_items = []
+            seen_texts = set()
+             
+            for sub_query in sub_queries:
+                sub_retrieval_data = self.memory_manager.retrieve_context(sub_query, n_results=5, model_profile=model_profile)
+                sub_scored_items = sub_retrieval_data.get("scored_items", [])
+                for item in sub_scored_items:
+                    text_key = item["text"].strip().lower()
+                    if text_key not in seen_texts:
+                        seen_texts.add(text_key)
+                        all_scored_items.append(item)
+             
+            # Sort by score and take top items
+            all_scored_items.sort(key=lambda x: x["score"], reverse=True)
+            max_items = getattr(model_profile, "max_evidence_items", 8) if model_profile else 8
+            all_scored_items = all_scored_items[:max_items]
+             
+            # Build evidence packet from merged results
+            evidence_packet = self.memory_manager._build_evidence_packet(sub_retrieval_data["policy"], all_scored_items)
+            retrieval_data = {
+                "type": sub_retrieval_data["type"],
+                "evidence_packet": evidence_packet,
+                "policy": sub_retrieval_data["policy"],
+                "scored_items": all_scored_items
+            }
+        else:
+            retrieval_data = self.memory_manager.retrieve_context(user_input, n_results=5, model_profile=model_profile)
         
-        retrieval_data = self.memory_manager.retrieve_context(user_input, n_results=5, model_profile=model_profile)
         mode = retrieval_data["type"]
         evidence_packet: EvidencePacket = retrieval_data["evidence_packet"]
         self.last_evidence_packet = evidence_packet
@@ -196,6 +256,9 @@ class ContextBuilder:
             effective_system_prompt = (
                 "You are a knowledgeable AI assistant.\n"
                 "This is a general knowledge question, not a personal memory recall task.\n"
+                "For general knowledge questions, math, language tasks, and factual world knowledge, "
+                "answer directly from your training. Memory retrieval is only for personal facts about "
+                "the user — not for general capability questions.\n"
                 "If retrieved research context exists, use it first.\n"
                 "If no local research context exists, answer from standard model knowledge.\n"
                 "Do not say 'I don't know' unless the concept is genuinely unknown or the user asked for a sourced memory-backed answer.\n"
@@ -213,7 +276,21 @@ class ContextBuilder:
         sufficiency_feedback = "Local Knowledge Confidence: HIGH" if docs and len(docs) > 0 else "Local Knowledge Confidence: LOW\nWeb Research Allowed: TRUE"
         user_pref_rules = self._build_user_preference_rules()
 
-        if docs and append_structured_memory:
+        # Greeting guard: skip memory injection for greetings
+        if self._is_greeting(user_input):
+            # For greetings, use minimal system prompt without memory injection
+            effective_system_prompt = (
+                "You are a helpful personal AI assistant. "
+                "Answer directly, naturally, and use the relevant memory facts below when present. "
+                "Do not frame your reply as programming help unless the user asks for code."
+            )
+            if docs:
+                clean_docs = self._flatten_evidence_text(evidence_packet, limit=4)
+                context_str = "\n".join(clean_docs)
+                if context_str:
+                    effective_system_prompt = f"{effective_system_prompt}\nRelevant context: {context_str}"
+            logger.info(f"[INJECT] Greeting detected, skipping memory injection")
+        elif docs and append_structured_memory:
             formatted_docs = "\n".join(docs)
             factual_recall_rule = ""
             factual_recall_prelude = ""
@@ -541,9 +618,12 @@ class ContextBuilder:
     def _format_section(self, name: str, items) -> str:
         lines = [f"<{name}>"]
         for item in items:
-            lines.append(
-                f"[id={item.memory_id}] {item.text} | confidence={item.confidence:.2f} | score={item.score:.2f} | source={item.collection}"
-            )
+            # Only expose the content, never internal fields
+            content = item.text
+            # Strip any internal format artifacts
+            if "|" in content:
+                content = content.split("|")[0].strip()
+            lines.append(f"[id={item.memory_id}] {content}")
         lines.append(f"</{name}>")
         return "\n".join(lines)
 

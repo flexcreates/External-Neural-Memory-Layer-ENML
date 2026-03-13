@@ -70,6 +70,11 @@ class MemoryManager:
             search_collections.extend(policy.secondary_collections)
         search_collections = list(dict.fromkeys(search_collections))
 
+        # Adjust threshold for conversational queries
+        threshold = MIN_RETRIEVAL_CONFIDENCE
+        if policy.name == "conversation_policy":
+            threshold = 0.65
+
         for c in search_collections:
             try:
                 per_collection_limit = max(policy.limits.values()) if policy.limits else 5
@@ -83,7 +88,7 @@ class MemoryManager:
                     heading = payload.get("heading", "")
                     memory_type = payload.get("memory_type", self._infer_memory_type(c, payload))
                     
-                    if score >= MIN_RETRIEVAL_CONFIDENCE and text:
+                    if score >= threshold and text:
                         scored_items.append({
                             "id": str(r.get("id", "")),
                             "text": text,
