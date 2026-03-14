@@ -147,7 +147,8 @@ class EntityLinker:
             if not path.exists(): return {}
             with open(path, 'r', encoding='utf-8') as f:
                 return json.load(f)
-        except Exception:
+        except Exception as e:
+            logger.warning(f"EntityLinker: Failed to load JSON from {path}: {e}")
             return {}
 
     def resolve_or_create(self, mention: str) -> Entity:
@@ -201,7 +202,8 @@ class EntityLinker:
                 similarity = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2))
                 if similarity < 0.75:
                     return True # They are talking about different explicit things
-            except Exception:
+            except Exception as e:
+                logger.warning(f"EntityLinker: Similarity check failed: {e}")
                 return True
                 
         return False

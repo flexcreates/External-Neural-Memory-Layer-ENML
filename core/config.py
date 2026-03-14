@@ -51,7 +51,7 @@ AI_NAME = os.getenv("AI_NAME", "ENML Assistant")
 AI_HINT = os.getenv("AI_HINT", "running on local hardware")
 
 # Input & Extraction Limits
-MAX_REALTIME_INPUT_CHARS = int(os.getenv("MAX_REALTIME_INPUT_CHARS", 500))
+MAX_REALTIME_INPUT_CHARS = int(os.getenv("MAX_REALTIME_INPUT_CHARS", 1500))
 MAX_FACTS_PER_EXTRACTION = int(os.getenv("MAX_FACTS_PER_EXTRACTION", 10))
 MAX_DOCUMENT_FACTS = int(os.getenv("MAX_DOCUMENT_FACTS", 25))
 MAX_DOCUMENT_SUMMARIES = int(os.getenv("MAX_DOCUMENT_SUMMARIES", 15))

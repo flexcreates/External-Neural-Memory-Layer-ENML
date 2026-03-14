@@ -20,7 +20,18 @@ def get_reranker():
         with _reranker_lock:
             if _reranker_instance is None:
                 logger.info("Loading Reranker model: BAAI/bge-reranker-base (on CPU)")
-                _reranker_instance = CrossEncoder("BAAI/bge-reranker-base", device="cpu")
+                try:
+                    _reranker_instance = CrossEncoder(
+                        "BAAI/bge-reranker-base",
+                        device="cpu",
+                        local_files_only=True,
+                    )
+                except OSError:
+                    logger.info("Reranker not cached locally, downloading once")
+                    _reranker_instance = CrossEncoder(
+                        "BAAI/bge-reranker-base",
+                        device="cpu",
+                    )
     return _reranker_instance
 
 class Retriever:
@@ -242,8 +253,8 @@ class Retriever:
                         # Max decay penalty of -0.15 slowly accumulating
                         decay_penalty = min(age_days * 0.005, 0.15) * importance_factor
                         score -= decay_penalty
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.warning(f"[RETRIEVE] Failed to parse timestamp for recency boost: {e}")
             
             # Entity keyword matching boost
             subject = payload.get("subject", "").lower()

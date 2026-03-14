@@ -15,6 +15,10 @@ class EmbeddingService:
     EntityLinker, ingestion scripts) to avoid duplicating the ~90 MB
     in-memory model. CPU is used intentionally because the LLM server
     already occupies most VRAM.
+    
+    local_files_only=True prevents network calls on every startup.
+    The model must be cached in the default HuggingFace hub directory
+    (~/.cache/huggingface/) from a prior run or manual download.
     """
     _instance = None
 
@@ -24,7 +28,19 @@ class EmbeddingService:
                 if cls._instance is None:
                     instance = super().__new__(cls)
                     logger.info(f"Loading embedding model: {EMBEDDING_MODEL} (on CPU)")
-                    instance.model = SentenceTransformer(EMBEDDING_MODEL, device="cpu")
+                    try:
+                        instance.model = SentenceTransformer(
+                            EMBEDDING_MODEL,
+                            device="cpu",
+                            local_files_only=True,
+                        )
+                    except OSError:
+                        # First run: download and cache the model
+                        logger.info(f"Model not cached locally, downloading once: {EMBEDDING_MODEL}")
+                        instance.model = SentenceTransformer(
+                            EMBEDDING_MODEL,
+                            device="cpu",
+                        )
                     cls._instance = instance
         return cls._instance
 

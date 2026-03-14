@@ -30,8 +30,15 @@ class ContextBuilder:
         ]
     
     def _is_greeting(self, user_input: str) -> bool:
-        """Check if user input is a greeting to avoid memory contamination."""
+        """Check if user input is a greeting to avoid memory contamination.
+        
+        Excludes messages that contain fact predicates (e.g. 'hi i am flex')
+        since those should go through normal memory extraction.
+        """
+        from .memory.extractor import _contains_fact_predicate
         text = user_input.lower().strip()
+        if _contains_fact_predicate(text):
+            return False
         return any(text.startswith(p) or p in text for p in self.GREETING_PATTERNS)
         
     def build_context(self, 
@@ -241,16 +248,37 @@ class ContextBuilder:
                 f"Context:\n{context_str}"
             )
         elif policy_name == "personal_memory" or (is_personal_query and has_local_evidence):
-            temperature = 0.1
-            effective_system_prompt = (
-                "You are a memory recall assistant.\n"
-                "Your ONLY job is to read the verified knowledge block below and state facts from it.\n"
-                "Do not answer from general knowledge.\n"
-                "If a fact is not in the knowledge block, say 'I do not have that in my memory.'\n"
-                "CRITICAL: When the user asks 'who am I' or 'what is my name', look for a fact like 'User name is X'.\n"
-                "Always answer in the second person: 'Your name is X', 'Your favorite color is Y'.\n"
-                "Never say 'My name is X' when reciting user facts."
+            # Check if user is PROVIDING facts rather than ASKING about them
+            from .memory.extractor import _contains_fact_predicate
+            is_providing_facts = (
+                _contains_fact_predicate(user_input)
+                and not user_input.strip().endswith("?")
+                and not any(user_input.lower().strip().startswith(q) for q in [
+                    "what ", "who ", "where ", "when ", "why ", "how ",
+                    "which ", "do i", "am i", "is my", "are my",
+                ])
             )
+            if is_providing_facts:
+                temperature = 0.5
+                effective_system_prompt = (
+                    "You are a helpful personal AI assistant with memory.\n"
+                    "The user is sharing personal information with you. Acknowledge what they say naturally.\n"
+                    "If memory facts are available below, you may reference them too.\n"
+                    "Be conversational and warm. Do NOT just recite stored facts when the user is telling you something new.\n"
+                    "Always answer in the second person: 'Your name is X', 'Your favorite color is Y'.\n"
+                    "Never say 'My name is X' when reciting user facts."
+                )
+            else:
+                temperature = 0.1
+                effective_system_prompt = (
+                    "You are a memory recall assistant.\n"
+                    "Your ONLY job is to read the verified knowledge block below and state facts from it.\n"
+                    "Do not answer from general knowledge.\n"
+                    "If a fact is not in the knowledge block, say 'I do not have that in my memory.'\n"
+                    "CRITICAL: When the user asks 'who am I' or 'what is my name', look for a fact like 'User name is X'.\n"
+                    "Always answer in the second person: 'Your name is X', 'Your favorite color is Y'.\n"
+                    "Never say 'My name is X' when reciting user facts."
+                )
         elif policy_name == "research_memory" or is_general_knowledge_query:
             temperature = 0.35 if is_small_model else 0.45
             effective_system_prompt = (

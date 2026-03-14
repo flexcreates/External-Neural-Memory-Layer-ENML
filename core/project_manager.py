@@ -38,7 +38,8 @@ class ProjectManager:
             # We will use the direct parent folder name as project name for now 
             # if we can't determine better.
             return abs_path.parent.name
-        except Exception:
+        except Exception as e:
+            logger.warning(f"ProjectManager: Failed to resolve project name from path: {e}")
             return "Uncategorized"
 
     def _get_project_dir(self, project_name: str) -> Path:
